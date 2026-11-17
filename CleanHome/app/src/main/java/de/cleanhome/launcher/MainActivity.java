@@ -76,6 +76,11 @@ import java.util.Set;
  */
 public class MainActivity extends Activity {
 
+    /** Zeitpunkt, an dem CleanHome bewusst eine App gestartet hat (dann kein Standbild zeigen). */
+    static volatile long lastLeftByLaunch;
+    /** true, solange CleanHome wirklich vorne ist (fuer das Standbild). */
+    static volatile boolean isFront;
+
     // ---------------------------------------------------------------- Einstellungen
     private static final String PREFS = "cleanhome";
     private static final String KEY_ROWS = "rows";
@@ -194,13 +199,30 @@ public class MainActivity extends Activity {
         loadApps();
         ui.removeCallbacks(weatherTick); ui.post(weatherTick);
         ui.removeCallbacks(netTick); ui.post(netTick);
+        isFront = true;
+        HomeMask.hide(this, true);        // CleanHome ist vorne -> Standbild ausblenden
         if (msm == null) initMedia();     // z. B. wenn die Berechtigung erst jetzt erteilt wurde
         wizHome();
         resetIdle();
     }
 
+    /** Standbild des Home Screens merken, damit es beim naechsten Home-Druck sofort da ist. */
+    private void takeSnapshot() {
+        try {
+            if (splash != null || root == null || root.getWidth() == 0) return;
+            if (saver != null && saver.getVisibility() == View.VISIBLE) return;
+            if (menuLayer != null && menuLayer.getVisibility() == View.VISIBLE) return;
+            if (pcLayer != null && pcLayer.getVisibility() == View.VISIBLE) return;
+            Bitmap b = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.RGB_565);
+            root.draw(new Canvas(b));
+            HomeMask.snapshot = b;
+        } catch (Throwable ignored) { }
+    }
+
     @Override
     protected void onPause() {
+        isFront = false;
+        takeSnapshot();
         super.onPause();
         ui.removeCallbacks(weatherTick);
         ui.removeCallbacks(netTick);
@@ -2296,6 +2318,7 @@ public class MainActivity extends Activity {
     private void launch(AppInfo a) {
         if (PC_PKG.equals(a.pkg)) { startPcGaming(); return; }
         lastLaunchedPkg = a.pkg;
+        lastLeftByLaunch = System.currentTimeMillis();
         wizLaunch();
         try {
             startActivity(a.launch);

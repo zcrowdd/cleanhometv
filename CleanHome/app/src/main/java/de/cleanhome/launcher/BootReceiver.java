@@ -8,6 +8,7 @@ import android.content.Intent;
 public class BootReceiver extends BroadcastReceiver {
     @Override
     public void onReceive(Context c, Intent i) {
+        HomeMask.show(c);          // Amazon-Startseite nach dem Einschalten sofort verdecken
         HomeWatchService.start(c);
         Intent home = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try { c.startActivity(home); } catch (Exception ignored) { }

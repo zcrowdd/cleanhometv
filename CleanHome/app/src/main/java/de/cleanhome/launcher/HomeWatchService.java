@@ -92,11 +92,13 @@ public class HomeWatchService extends Service {
                     if (line.contains("category.HOME")) {
                         // Home gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
                         Log.i(TAG, "Home erkannt");
+                        HomeMask.show(this);               // sofort Standbild ueber Amazon legen
                         later(0, "home");
                         later(700, "home+700");
                     } else if (line.contains("am_set_resumed_activity") || line.contains("am_resume_activity")) {
                         // Amazon ist wirklich vorne angekommen: sofort korrigieren
                         Log.i(TAG, "Amazon vorne erkannt");
+                        if (System.currentTimeMillis() - MainActivity.lastLeftByLaunch > 4000) HomeMask.show(this);
                         later(0, "resumed");
                     }
                 }
