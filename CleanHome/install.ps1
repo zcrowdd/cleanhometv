@@ -62,8 +62,11 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter + Bedienungshilfe) ..." -ForegroundColor Cyan
 Sh "pm grant $Pkg android.permission.READ_LOGS"
-Sh "am force-stop com.spocky.projengmenu"
-Sh "pm uninstall com.spocky.projengmenu" | Out-Null
+if ((Sh "pm list packages com.spocky.projengmenu") -match "projengmenu") {
+    Write-Host "   Projectivy gefunden -> wird entfernt"
+    Sh "am force-stop com.spocky.projengmenu"
+    Sh "pm uninstall com.spocky.projengmenu" | Out-Null
+}
 Sh "settings put secure enabled_accessibility_services $Svc"
 Sh "settings put secure accessibility_enabled 1"
 

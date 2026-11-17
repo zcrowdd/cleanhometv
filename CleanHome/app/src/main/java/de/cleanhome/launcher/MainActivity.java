@@ -726,9 +726,16 @@ public class MainActivity extends Activity {
             hs.setClipToPadding(false);
             LinearLayout line = new LinearLayout(this);
             line.setClipChildren(false);
-            line.setPadding(0, dp(4), 0, dp(4));
+            // Reihe ragt 32dp in den Rand hinein, damit die vergroesserte Kachel nicht abgeschnitten wird;
+            // die Kacheln selbst bleiben genau an der Linie der Ueberschriften.
+            line.setPadding(dp(32), dp(12), dp(32), dp(12));
             hs.addView(line);
-            rowsBox.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+            LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+            hlp.leftMargin = -dp(32);
+            hlp.rightMargin = -dp(32);
+            hlp.topMargin = -dp(8);
+            hlp.bottomMargin = -dp(8);
+            rowsBox.addView(hs, hlp);
             for (String p : vis) line.addView(tile(find(p), r.id, true));
         }
 
@@ -1948,6 +1955,23 @@ public class MainActivity extends Activity {
         scroll.setScaleY(1.04f);
         scroll.setAlpha(0f);
 
+        // Der Stick braucht beim Kaltstart ~1,5 s bis zum ersten Bild. Deshalb laeuft die
+        // Animation erst los, wenn wirklich etwas auf dem Bildschirm ist.
+        final View[] parts = {hv, made, line, sub};
+        final List<TextView> ls = letters;
+        splash.getViewTreeObserver().addOnPreDrawListener(new android.view.ViewTreeObserver.OnPreDrawListener() {
+            @Override public boolean onPreDraw() {
+                if (splash != null) splash.getViewTreeObserver().removeOnPreDrawListener(this);
+                ui.postDelayed(() -> playSplash(parts, ls), 250);
+                return true;
+            }
+        });
+        ui.postDelayed(() -> endSplash(false), 7000);   // Sicherheitsnetz, falls nie gezeichnet wird
+    }
+
+    private void playSplash(View[] parts, List<TextView> letters) {
+        if (splash == null) return;
+        View hv = parts[0], made = parts[1], line = parts[2], sub = parts[3];
         DecelerateInterpolator dec = new DecelerateInterpolator(2f);
         hv.animate().alpha(1f).setDuration(900).start();
         made.animate().alpha(1f).setStartDelay(100).setDuration(400).start();

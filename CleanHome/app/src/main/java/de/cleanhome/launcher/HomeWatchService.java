@@ -30,6 +30,9 @@ public class HomeWatchService extends Service {
     private static volatile boolean running;
     private Thread worker;
     private volatile long lastLaunch;
+    private final long[] recent = new long[5];   // Schutz gegen Endlosschleifen
+    private int recentIdx;
+    private volatile long pausedUntil;
 
     public static void start(Context c) {
         Intent i = new Intent(c, HomeWatchService.class);
@@ -74,13 +77,19 @@ public class HomeWatchService extends Service {
             Process p = null;
             try {
                 // -T 1: nur neue Zeilen, nicht das alte Protokoll
-                p = Runtime.getRuntime().exec(new String[]{"logcat", "-T", "1", "-b", "main,system",
-                        "ActivityManager:I", "ActivityTaskManager:I", "*:S"});
+                // main/system: "START ... category.HOME ... com.amazon.tv.launcher" (Home gedrueckt)
+                // events:      "am_set_resumed_activity ... com.amazon.tv.launcher" (Amazon ist wirklich vorne)
+                p = Runtime.getRuntime().exec(new String[]{"logcat", "-T", "1", "-b", "main,system,events",
+                        "ActivityManager:I", "ActivityTaskManager:I",
+                        "am_set_resumed_activity:I", "am_resume_activity:I", "*:S"});
                 BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
                 String line;
                 while (running && (line = r.readLine()) != null) {
-                    if (line.contains(AMAZON_HOME) && (line.contains("START") || line.contains("category.HOME"))) {
-                        goHome();
+                    if (!line.contains(AMAZON_HOME)) continue;
+                    if (line.contains("category.HOME")) {
+                        goHome(150);                       // Home gedrueckt: kurz warten, dann CleanHome
+                    } else if (line.contains("am_set_resumed_activity") || line.contains("am_resume_activity")) {
+                        goHome(0);                         // Amazon hat sich doch nach vorne geschoben: sofort korrigieren
                     }
                 }
             } catch (Exception ignored) {
@@ -91,12 +100,19 @@ public class HomeWatchService extends Service {
         }
     }
 
-    private void goHome() {
+    private void goHome(long delayMs) {
         long now = SystemClock.uptimeMillis();
-        if (now - lastLaunch < 1200) return;   // Entprellen: keine Startschleife
+        if (now < pausedUntil) return;
+        if (now - lastLaunch < 300) return;          // doppelte Zeilen zur selben Sekunde ignorieren
         lastLaunch = now;
+        // Schleifenschutz: mehr als 5 Starts in 4 s -> Amazon kaempft dagegen, 10 s Pause
+        recent[recentIdx] = now;
+        recentIdx = (recentIdx + 1) % recent.length;
+        long oldest = recent[recentIdx];
+        if (oldest != 0 && now - oldest < 4000) { pausedUntil = now + 10000; return; }
+        if (delayMs > 0) SystemClock.sleep(delayMs);
         Intent i = new Intent(this, MainActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         try { startActivity(i); } catch (Exception ignored) { }
     }
