@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
+import android.util.Log;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -30,7 +31,8 @@ public class HomeWatchService extends Service {
     private static volatile boolean running;
     private Thread worker;
     private volatile long lastLaunch;
-    private final long[] recent = new long[5];   // Schutz gegen Endlosschleifen
+    private static final String TAG = "CleanHomeWatch";
+    private final long[] recent = new long[10];  // Schutz gegen Endlosschleifen
     private int recentIdx;
     private volatile long pausedUntil;
 
@@ -45,6 +47,7 @@ public class HomeWatchService extends Service {
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(1, buildNotification());
         if (worker == null || !worker.isAlive()) {
+            Log.i(TAG, "Waechter gestartet");
             running = true;
             worker = new Thread(this::watchLoop, "cleanhome-homewatch");
             worker.start();
@@ -87,12 +90,19 @@ public class HomeWatchService extends Service {
                 while (running && (line = r.readLine()) != null) {
                     if (!line.contains(AMAZON_HOME)) continue;
                     if (line.contains("category.HOME")) {
-                        goHome(150);                       // Home gedrueckt: kurz warten, dann CleanHome
+                        // Home gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
+                        Log.i(TAG, "Home erkannt");
+                        later(0, "home");
+                        later(700, "home+700");
                     } else if (line.contains("am_set_resumed_activity") || line.contains("am_resume_activity")) {
-                        goHome(0);                         // Amazon hat sich doch nach vorne geschoben: sofort korrigieren
+                        // Amazon ist wirklich vorne angekommen: sofort korrigieren
+                        Log.i(TAG, "Amazon vorne erkannt");
+                        later(0, "resumed");
                     }
                 }
-            } catch (Exception ignored) {
+                Log.w(TAG, "logcat beendet");
+            } catch (Exception e) {
+                Log.w(TAG, "logcat Fehler", e);
             } finally {
                 if (p != null) p.destroy();
             }
@@ -100,21 +110,30 @@ public class HomeWatchService extends Service {
         }
     }
 
-    private void goHome(long delayMs) {
+    private void later(long delayMs, String why) {
+        if (delayMs <= 0) { goHome(why); return; }
+        new Thread(() -> { SystemClock.sleep(delayMs); goHome(why); }).start();
+    }
+
+    private synchronized void goHome(String why) {
         long now = SystemClock.uptimeMillis();
-        if (now < pausedUntil) return;
-        if (now - lastLaunch < 300) return;          // doppelte Zeilen zur selben Sekunde ignorieren
+        if (now < pausedUntil) { Log.i(TAG, "Pause aktiv, ignoriere " + why); return; }
+        if (now - lastLaunch < 120) return;           // exakt doppelte Zeilen ignorieren
         lastLaunch = now;
-        // Schleifenschutz: mehr als 5 Starts in 4 s -> Amazon kaempft dagegen, 10 s Pause
+        // Schleifenschutz: mehr als 10 Starts in 5 s -> Amazon kaempft dagegen, 10 s Pause
         recent[recentIdx] = now;
         recentIdx = (recentIdx + 1) % recent.length;
         long oldest = recent[recentIdx];
-        if (oldest != 0 && now - oldest < 4000) { pausedUntil = now + 10000; return; }
-        if (delayMs > 0) SystemClock.sleep(delayMs);
+        if (oldest != 0 && now - oldest < 5000) {
+            pausedUntil = now + 10000;
+            Log.w(TAG, "Zu viele Starts - 10 s Pause");
+            return;
+        }
+        Log.i(TAG, "Starte CleanHome (" + why + ")");
         Intent i = new Intent(this, MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
                         | Intent.FLAG_ACTIVITY_NO_ANIMATION);
-        try { startActivity(i); } catch (Exception ignored) { }
+        try { startActivity(i); } catch (Exception e) { Log.w(TAG, "Start fehlgeschlagen", e); }
     }
 
     @Override
