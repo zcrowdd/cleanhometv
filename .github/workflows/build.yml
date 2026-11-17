@@ -2,7 +2,11 @@ name: APK bauen
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -24,3 +28,13 @@ jobs:
         with:
           name: CleanHome-apk
           path: CleanHome/app/build/outputs/apk/debug/app-debug.apk
+      - name: APK zusaetzlich in Branch "apk" ablegen
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir apkout && cd apkout
+          cp "$GITHUB_WORKSPACE/CleanHome/app/build/outputs/apk/debug/app-debug.apk" .
+          git init -q
+          git checkout -q -b apk
+          git add app-debug.apk
+          git -c user.name="github-actions" -c user.email="actions@users.noreply.github.com" commit -q -m "APK aus ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" apk
