@@ -1,0 +1,162 @@
+package de.cleanhome.launcher;
+
+import android.graphics.Color;
+
+import org.json.JSONObject;
+
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+
+/**
+ * Lokale Steuerung von WiZ-Lampen per UDP (Port 38899), ganz ohne Cloud.
+ * In der WiZ-App muss "Lokale Kommunikation zulassen" aktiv sein (Standard).
+ */
+public class WizLights {
+
+    public interface Callback { void done(List<String> ips); }
+
+    private static final int PORT = 38899;
+    private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private Future<?> running;
+    private final List<String> ips = new ArrayList<>();
+    private int curR = 255, curG = 180, curB = 120, curDim = 60;
+    private volatile String lastJson;
+
+    public synchronized void setLamps(List<String> list) {
+        ips.clear();
+        ips.addAll(list);
+    }
+
+    public synchronized boolean hasLamps() { return !ips.isEmpty(); }
+
+    /** Weicher Farbwechsel (~0,5 s) zu einer RGB-Farbe. */
+    public void fadeTo(int color, int dimming) {
+        final int tr = Color.red(color), tg = Color.green(color), tb = Color.blue(color);
+        submit(() -> {
+            int sr = curR, sg = curG, sb = curB, sd = curDim;
+            int steps = 5;
+            for (int i = 1; i <= steps; i++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                float f = i / (float) steps;
+                curR = Math.round(sr + (tr - sr) * f);
+                curG = Math.round(sg + (tg - sg) * f);
+                curB = Math.round(sb + (tb - sb) * f);
+                curDim = Math.round(sd + (dimming - sd) * f);
+                send("{\"method\":\"setPilot\",\"params\":{\"r\":" + curR + ",\"g\":" + curG
+                        + ",\"b\":" + curB + ",\"dimming\":" + Math.max(10, curDim) + "}}");
+                sleep(100);
+            }
+        });
+    }
+
+    /** Warmweiss (Kelvin), z. B. fuer Kino-Modus. */
+    public void white(int kelvin, int dimming) {
+        submit(() -> {
+            curDim = dimming;
+            curR = 255; curG = kelvin < 3000 ? 160 : 200; curB = kelvin < 3000 ? 90 : 150;  // grobe Naeherung fuer naechsten Fade
+            send("{\"method\":\"setPilot\",\"params\":{\"temp\":" + kelvin + ",\"dimming\":" + Math.max(10, dimming) + "}}");
+        });
+    }
+
+    /** Den zuletzt gesendeten Zustand nochmal schicken (falls ein UDP-Paket verloren ging). */
+    public void resend() {
+        final String j = lastJson;
+        if (j == null) return;
+        synchronized (this) {
+            if (ips.isEmpty()) return;
+            if (running != null && !running.isDone()) return;   // laeuft noch ein Fade -> der sendet ohnehin
+            running = worker.submit(() -> send(j));
+        }
+    }
+
+    /** Sucht alle WiZ-Lampen im WLAN (ca. 3 s). */
+    public void discover(String localIp, Callback cb) {
+        new Thread(() -> {
+            Set<String> found = new LinkedHashSet<>();
+            try (DatagramSocket s = new DatagramSocket()) {
+                s.setBroadcast(true);
+                s.setSoTimeout(400);
+                byte[] q1 = "{\"method\":\"getPilot\",\"params\":{}}".getBytes(StandardCharsets.UTF_8);
+                byte[] q2 = "{\"method\":\"registration\",\"params\":{\"phoneMac\":\"AAAAAAAAAAAA\",\"register\":false,\"phoneIp\":\"1.2.3.4\",\"id\":\"1\"}}"
+                        .getBytes(StandardCharsets.UTF_8);
+                List<InetAddress> targets = new ArrayList<>();
+                targets.add(InetAddress.getByName("255.255.255.255"));
+                if (localIp != null && localIp.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
+                    targets.add(InetAddress.getByName(localIp.substring(0, localIp.lastIndexOf('.')) + ".255"));
+                }
+                long end = System.currentTimeMillis() + 3000;
+                int round = 0;
+                while (System.currentTimeMillis() < end) {
+                    if (round++ % 3 == 0) {
+                        for (InetAddress t : targets) {
+                            s.send(new DatagramPacket(q1, q1.length, t, PORT));
+                            s.send(new DatagramPacket(q2, q2.length, t, PORT));
+                        }
+                    }
+                    try {
+                        byte[] buf = new byte[1024];
+                        DatagramPacket p = new DatagramPacket(buf, buf.length);
+                        s.receive(p);
+                        String txt = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8);
+                        if (txt.contains("\"result\"") || txt.contains("\"mac\"")) {
+                            found.add(p.getAddress().getHostAddress());
+                        }
+                    } catch (SocketTimeoutException ignored) { }
+                }
+            } catch (Exception ignored) { }
+            cb.done(new ArrayList<>(found));
+        }).start();
+    }
+
+    /** Kurzes Aufblitzen zum Erkennen einer Lampe. */
+    public void blink(String ip) {
+        worker.submit(() -> {
+            sendTo(ip, "{\"method\":\"setPilot\",\"params\":{\"r\":255,\"g\":255,\"b\":255,\"dimming\":100}}");
+            sleep(400);
+            sendTo(ip, "{\"method\":\"setPilot\",\"params\":{\"r\":10,\"g\":114,\"b\":239,\"dimming\":40}}");
+            sleep(400);
+            sendTo(ip, "{\"method\":\"setPilot\",\"params\":{\"r\":255,\"g\":255,\"b\":255,\"dimming\":100}}");
+        });
+    }
+
+    private synchronized void submit(Runnable r) {
+        if (ips.isEmpty()) return;
+        if (running != null) running.cancel(true);
+        running = worker.submit(r);
+    }
+
+    private void send(String json) {
+        lastJson = json;
+        List<String> copy;
+        synchronized (this) { copy = new ArrayList<>(ips); }
+        for (String ip : copy) sendTo(ip, json);
+    }
+
+    private static void sendTo(String ip, String json) {
+        try (DatagramSocket s = new DatagramSocket()) {
+            byte[] b = json.getBytes(StandardCharsets.UTF_8);
+            s.send(new DatagramPacket(b, b.length, InetAddress.getByName(ip), PORT));
+        } catch (Exception ignored) { }
+    }
+
+    private static void sleep(long ms) {
+        try { Thread.sleep(ms); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    /** Fuer den Fall, dass jemand das JSON sehen will (Debug). */
+    static String describe(int color) {
+        try {
+            return new JSONObject().put("r", Color.red(color)).put("g", Color.green(color)).put("b", Color.blue(color)).toString();
+        } catch (Exception e) { return ""; }
+    }
+}
