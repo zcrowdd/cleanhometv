@@ -1168,7 +1168,7 @@ public class MainActivity extends Activity {
         items.add(new MItem("📱  Handy-Steuerung (QR-Code)", this::showRemoteQr));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
-        items.add(new MItem("Govee-Licht  ·  " + (goveeOn ? "dimmt bei Streaming" : "aus"), this::openGoveeMenu));
+        items.add(new MItem("Govee-Licht  ·  " + (goveeIps.isEmpty() ? "nicht eingerichtet" : goveeIps.size() + " verbunden"), this::openGoveeMenu));
         items.add(new MItem("Bildschirmschoner jetzt starten", () -> ui.postDelayed(showSaver, 300)));
         showMenu("Einstellungen", items);
     }
@@ -1805,7 +1805,7 @@ public class MainActivity extends Activity {
             if (lightManual.equals(lightManualSent)) return;
             lightManualSent = lightManual;
             lightKey = null;
-            boolean w = wiz.hasLamps(), g = govee.hasLamps();
+            boolean w = wiz.hasLamps(), g = false;   // Govee bleibt im eigenen Video-Modus
             switch (lightManual) {
                 case "bright": if (w) wiz.white(3200, 100); if (g) { govee.power(true); govee.brightness(100); } break;
                 case "dim":    if (w) wiz.white(2400, 20);  if (g) { govee.power(true); govee.brightness(15); } break;
@@ -1814,7 +1814,6 @@ public class MainActivity extends Activity {
             return;
         }
         if (lightManualSent != null) {             // zurueck zur Automatik
-            if ("off".equals(lightManualSent) && govee.hasLamps()) govee.power(true);
             lightManualSent = null;
             lightKey = null;
             govee.forget();
@@ -2047,41 +2046,25 @@ public class MainActivity extends Activity {
         govee.setLamps(goveeIps);
     }
 
-    /** Streaming-App vorne -> gedimmt, sonst normale Helligkeit. Farbe bleibt immer wie in der Govee-App. */
+    private boolean goveeRestored;
+
+    /**
+     * Govee-LEDs haben ihren eigenen Video-/Sync-Modus, der auf das Bild reagiert. CleanHome greift
+     * deshalb NICHT ein (kein Dimmen, keine Farbe) - es liest nur die Farbe fuer den Ruhebildschirm.
+     * Einmalig wird die Helligkeit zurueckgesetzt, die aeltere Versionen beim Streaming gedimmt hatten.
+     */
     private void applyGovee() {
-        if (!goveeOn || !govee.hasLamps()) return;
-        boolean streaming = screenOn && !homeVisible
-                && (saver == null || saver.getVisibility() != View.VISIBLE)
-                && appKind(fgPkg()) == K_VIDEO;
-        govee.brightness(streaming ? goveeDim : goveeNormal);
+        if (goveeRestored || !govee.hasLamps()) return;
+        goveeRestored = true;
+        if (goveeOn) govee.brightness(goveeNormal);
+        goveeOn = false;
+        saveGovee();
     }
 
     private void openGoveeMenu() {
         List<MItem> items = new ArrayList<>();
-        items.add(new MItem((goveeOn ? "●  " : "○  ") + "An   — bei Streaming-Apps dimmen", () -> {
-            if (goveeIps.isEmpty()) { toast("Erst Govee-Lichter suchen und auswählen"); ui.postDelayed(this::openGoveeMenu, 300); return; }
-            goveeOn = true; saveGovee(); govee.forget(); scheduleLights(0);
-            toast("Govee: dimmt bei Streaming");
-            ui.postDelayed(this::openGoveeMenu, 200);
-        }));
-        items.add(new MItem((!goveeOn ? "●  " : "○  ") + "Aus   — CleanHome lässt Govee in Ruhe", () -> {
-            if (goveeOn) govee.brightness(goveeNormal);
-            goveeOn = false; saveGovee();
-            toast("Govee: aus");
-            ui.postDelayed(this::openGoveeMenu, 200);
-        }));
-        items.add(new MItem("Helligkeit normal  ·  " + goveeNormal + " %", () -> {
-            int[] v = {100, 80, 60, 40};
-            int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeNormal) k = (x + 1) % v.length;
-            goveeNormal = v[k]; saveGovee(); govee.forget(); scheduleLights(0);
-            ui.postDelayed(this::openGoveeMenu, 150);
-        }));
-        items.add(new MItem("Helligkeit bei Streaming  ·  " + goveeDim + " %", () -> {
-            int[] v = {5, 10, 15, 25, 40};
-            int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeDim) k = (x + 1) % v.length;
-            goveeDim = v[k]; saveGovee(); govee.forget(); scheduleLights(0);
-            ui.postDelayed(this::openGoveeMenu, 150);
-        }));
+        items.add(new MItem("ⓘ  Govee läuft im eigenen Video-Modus weiter – CleanHome ändert nichts", () -> ui.postDelayed(this::openGoveeMenu, 150)));
+        items.add(new MItem("ⓘ  Der Ruhebildschirm übernimmt nur die aktuelle Govee-Farbe", () -> ui.postDelayed(this::openGoveeMenu, 150)));
         items.add(new MItem("⌕  Govee-Lichter im WLAN suchen", this::searchGovee));
         List<String> all = new ArrayList<>(goveeIps);
         for (String f : goveeFound.keySet()) if (!all.contains(f)) all.add(f);
@@ -2089,12 +2072,12 @@ public class MainActivity extends Activity {
             boolean on = goveeIps.contains(ip);
             String model = goveeFound.containsKey(ip) ? goveeFound.get(ip) + "  " : "";
             items.add(new MItem((on ? "☑  " : "☐  ") + model + ip, () -> {
-                if (goveeIps.contains(ip)) goveeIps.remove(ip); else { goveeIps.add(ip); govee.blink(ip); }
+                if (goveeIps.contains(ip)) goveeIps.remove(ip); else goveeIps.add(ip);
                 saveGovee();
                 ui.postDelayed(this::openGoveeMenu, 200);
             }));
         }
-        showMenu("Govee · " + (goveeOn ? "an" : "aus") + " · " + goveeIps.size() + " Gerät(e)", items);
+        showMenu("Govee · " + goveeIps.size() + " Gerät(e) · Farbe für den Ruhebildschirm", items);
     }
 
     private void searchGovee() {
@@ -2105,13 +2088,7 @@ public class MainActivity extends Activity {
             if (found.isEmpty()) toast("Nichts gefunden – in der Govee-App pro Licht „LAN-Steuerung“ einschalten");
             else {
                 toast(found.size() + " Govee-Licht(er) gefunden");
-                if (goveeIps.isEmpty()) {
-                    goveeIps.addAll(found.keySet());
-                    goveeOn = true;
-                    saveGovee();
-                    for (String ip : found.keySet()) govee.blink(ip);
-                    scheduleLights(2500);
-                }
+                if (goveeIps.isEmpty()) { goveeIps.addAll(found.keySet()); saveGovee(); }
             }
             openGoveeMenu();
         }));
