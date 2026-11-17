@@ -38,7 +38,7 @@ public final class HomeMask {
         @Override public void run() {
             if (mask == null) return;
             if (MainActivity.isFront) { hide(null, true); return; }
-            ui.postDelayed(this, 250);
+            ui.postDelayed(this, 80);
         }
     };
 
@@ -58,7 +58,7 @@ public final class HomeMask {
 
     /**
      * Ladebildschirm im CleanHome-Look: schwarz, "zcrowd", duenner Ladebalken.
-     * Der Balken laeuft in ~5 s (so lange haelt Android hoechstens zurueck) bis 90 %
+     * Der Balken laeuft in ~2 s (so lange haelt Android hoechstens zurueck) bis 90 %
      * und springt auf 100 %, sobald CleanHome wirklich vorne ist.
      */
     private static FrameLayout buildLoader(Context c) {
@@ -109,8 +109,8 @@ public final class HomeMask {
 
         if (progressAnim != null) progressAnim.cancel();
         progressAnim = android.animation.ValueAnimator.ofFloat(0.04f, 0.9f);
-        progressAnim.setDuration(5000);
-        progressAnim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f));
+        progressAnim.setDuration(2200);
+        progressAnim.setInterpolator(new android.view.animation.DecelerateInterpolator(2.2f));
         progressAnim.addUpdateListener(a -> { if (fill == f) f.setScaleX((float) a.getAnimatedValue()); });
         progressAnim.start();
         return v;
@@ -148,7 +148,7 @@ public final class HomeMask {
                 ui.postDelayed(autoHide, MAX_SHOW_MS);       // Sicherheitsnetz
                 shownAt = android.os.SystemClock.uptimeMillis();
                 ui.removeCallbacks(frontCheck);
-                ui.postDelayed(frontCheck, 250);
+                ui.postDelayed(frontCheck, 80);
             } catch (Exception ignored) {
                 mask = null;
             }
@@ -172,8 +172,8 @@ public final class HomeMask {
             if (progressAnim != null) progressAnim.cancel();
             if (smooth && fill != null) {
                 // Balken sauber auf 100 % fahren, dann ausblenden
-                fill.animate().scaleX(1f).setDuration(160).withEndAction(() ->
-                        v.animate().alpha(0f).setDuration(180).withEndAction(remove).start()).start();
+                fill.animate().scaleX(1f).setDuration(90).withEndAction(() ->
+                        v.animate().alpha(0f).setDuration(120).withEndAction(remove).start()).start();
             } else {
                 remove.run();
             }

@@ -1104,6 +1104,13 @@ public class MainActivity extends Activity {
             if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
+        items.add(new MItem("SPEICHER", null));
+        items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
+        items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
+            boolean n = !autoRam();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("auto_ram", n).apply();
+            toast(n ? "RAM wird vor jedem App-Start freigemacht" : "Automatisches Freimachen aus");
+        }));
         items.add(new MItem("CLEANHOME", null));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
@@ -2509,6 +2516,7 @@ public class MainActivity extends Activity {
         lastLaunchedPkg = a.pkg;
         lastLeftByLaunch = System.currentTimeMillis();
         wizLaunch();
+        if (autoRam()) freeRam(a.pkg, true);
         try {
             startActivity(a.launch);
         } catch (ActivityNotFoundException | SecurityException e) {
@@ -2571,6 +2579,51 @@ public class MainActivity extends Activity {
             .withEndAction(() -> toastView.setVisibility(View.GONE)).start();
 
     /** Meldung im CleanHome-Look (dunkle Pille unten) statt Amazon-Toast. */
+    // ---------- RAM freimachen ----------
+    private static final String[] RAM_KEEP = {
+            "android", "com.android.systemui", "com.android.phone", "com.android.providers",
+            "com.amazon.tv.launcher", "com.amazon.device.software.ota", "com.amazon.tv.settings",
+            "com.amazon.vizzini", "com.amazon.tv.inputpreference", "com.google.android.inputmethod",
+            "com.amazon.tv.ime", "com.android.inputmethod"};
+    private volatile boolean ramBusy;
+
+    private boolean autoRam() { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("auto_ram", true); }
+
+    /** Beendet Apps, die nur noch im Hintergrund liegen. Laufende Musik/Video (Vordergrunddienst) bleibt unberuehrt. */
+    private void freeRam(String exceptPkg, boolean silent) {
+        if (ramBusy) return;
+        ramBusy = true;
+        final android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+        new Thread(() -> {
+            long before = availMb(am);
+            int n = 0;
+            try {
+                for (android.content.pm.ApplicationInfo ai : getPackageManager().getInstalledApplications(0)) {
+                    String pk = ai.packageName;
+                    if (pk.equals(getPackageName()) || pk.equals(exceptPkg)) continue;
+                    if ((ai.flags & android.content.pm.ApplicationInfo.FLAG_PERSISTENT) != 0) continue;
+                    boolean keep = false;
+                    for (String k : RAM_KEEP) if (pk.equals(k) || pk.startsWith(k + ".")) { keep = true; break; }
+                    if (keep) continue;
+                    try { am.killBackgroundProcesses(pk); n++; } catch (Exception ignored) { }
+                }
+            } catch (Exception ignored) { }
+            if (!silent) {
+                try { Thread.sleep(600); } catch (InterruptedException ignored) { }
+                long gained = Math.max(0, availMb(am) - before);
+                long now = availMb(am);
+                ui.post(() -> toast(gained > 0 ? gained + " MB freigemacht  ·  " + now + " MB frei" : "Schon aufgeräumt  ·  " + now + " MB frei"));
+            }
+            ramBusy = false;
+        }, "freeRam").start();
+    }
+
+    private static long availMb(android.app.ActivityManager am) {
+        android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+        am.getMemoryInfo(mi);
+        return mi.availMem / (1024 * 1024);
+    }
+
     private void toast(String s) {
         ui.removeCallbacks(toastHide);
         toastView.animate().cancel();

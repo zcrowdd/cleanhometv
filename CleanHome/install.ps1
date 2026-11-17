@@ -19,7 +19,6 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $Pkg = "de.cleanhome.launcher"
-$Svc = "de.cleanhome.launcher/de.cleanhome.launcher.HomeKeyService"
 $T   = "$($Ip):5555"
 
 $adb = Join-Path $PSScriptRoot "adb.exe"
@@ -34,8 +33,8 @@ Write-Host "Falls am TV 'Debugging zulassen?' kommt: 'Immer erlauben' + OK. Dann
 if ((& $adb -s $T get-state 2>$null) -ne "device") { Write-Host "Keine Verbindung." -ForegroundColor Red; exit 1 }
 
 if ($Undo) {
-    Sh "settings put secure enabled_accessibility_services ''"
-    Sh "settings put secure accessibility_enabled 0"
+    $acc = "$(Sh "settings get secure enabled_accessibility_services")".Trim()
+    if ($acc -match "cleanhome") { Sh "settings put secure enabled_accessibility_services ''"; Sh "settings put secure accessibility_enabled 0" }
     Sh "settings put global private_dns_mode off"
     Sh "settings put secure screensaver_enabled 1"
     Sh "cmd notification disallow_listener de.cleanhome.launcher/de.cleanhome.launcher.MediaListener"
@@ -60,7 +59,7 @@ if ($res -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match") {
 if ($res -notmatch "Success") { Write-Host "Installation fehlgeschlagen - Ausgabe oben an Claude schicken." -ForegroundColor Red; exit 1 }
 $ErrorActionPreference = "Stop"
 
-Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter + Bedienungshilfe) ..." -ForegroundColor Cyan
+Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter) ..." -ForegroundColor Cyan
 Sh "pm grant $Pkg android.permission.READ_LOGS"
 Sh "appops set $Pkg SYSTEM_ALERT_WINDOW allow"   # Sofort-Home: Standbild ueber Amazon legen
 if ((Sh "pm list packages com.spocky.projengmenu") -match "projengmenu") {
@@ -68,8 +67,14 @@ if ((Sh "pm list packages com.spocky.projengmenu") -match "projengmenu") {
     Sh "am force-stop com.spocky.projengmenu"
     Sh "pm uninstall com.spocky.projengmenu" | Out-Null
 }
-Sh "settings put secure enabled_accessibility_services $Svc"
-Sh "settings put secure accessibility_enabled 1"
+# alte CleanHome-Bedienungshilfe austragen (wirkte auf Fire OS nie), andere Bedienungshilfen bleiben
+$acc = "$(Sh "settings get secure enabled_accessibility_services")".Trim()
+if ($acc -match "cleanhome") {
+    $rest = (($acc -split ":") | Where-Object { $_ -and $_ -notmatch "cleanhome" }) -join ":"
+    if ($rest) { Sh "settings put secure enabled_accessibility_services $rest" }
+    else { Sh "settings put secure enabled_accessibility_services ''"; Sh "settings put secure accessibility_enabled 0" }
+    Write-Host "   alte Bedienungshilfe entfernt"
+}
 
 Write-Host "`n[3] Amazon-Bildschirmschoner aus (CleanHome hat einen eigenen) ..." -ForegroundColor Cyan
 Sh "settings put secure screensaver_enabled 0"
