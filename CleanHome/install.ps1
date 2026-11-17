@@ -63,6 +63,8 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter) ..." -ForegroundColor Cyan
 Sh "pm grant $Pkg android.permission.READ_LOGS"
+Sh "dumpsys deviceidle whitelist +$Pkg" | Out-Null        # nicht im Hintergrund einschlaefern
+Sh "cmd appops set $Pkg RUN_IN_BACKGROUND allow" | Out-Null
 Sh "appops set $Pkg SYSTEM_ALERT_WINDOW allow"   # Sofort-Home: Standbild ueber Amazon legen
 if ((Sh "pm list packages com.spocky.projengmenu") -match "projengmenu") {
     Write-Host "   Projectivy gefunden -> wird entfernt"

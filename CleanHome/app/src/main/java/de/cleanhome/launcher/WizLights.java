@@ -52,7 +52,7 @@ public class WizLights {
                 curG = Math.round(sg + (tg - sg) * f);
                 curB = Math.round(sb + (tb - sb) * f);
                 curDim = Math.round(sd + (dimming - sd) * f);
-                send("{\"method\":\"setPilot\",\"params\":{\"r\":" + curR + ",\"g\":" + curG
+                send("{\"method\":\"setPilot\",\"params\":{\"state\":true,\"r\":" + curR + ",\"g\":" + curG
                         + ",\"b\":" + curB + ",\"dimming\":" + Math.max(10, curDim) + "}}");
                 sleep(100);
             }
@@ -84,7 +84,7 @@ public class WizLights {
                     int g = Math.round(start[i][1] + (Color.green(c) - start[i][1]) * f);
                     int b = Math.round(start[i][2] + (Color.blue(c) - start[i][2]) * f);
                     eachCur[i] = new int[]{r, g, b};
-                    String j = "{\"method\":\"setPilot\",\"params\":{\"r\":" + r + ",\"g\":" + g
+                    String j = "{\"method\":\"setPilot\",\"params\":{\"state\":true,\"r\":" + r + ",\"g\":" + g
                             + ",\"b\":" + b + ",\"dimming\":" + Math.max(10, dimming) + "}}";
                     sendTo(copy.get(i), j);
                 }
@@ -96,12 +96,17 @@ public class WizLights {
         });
     }
 
+    /** Lampen ausschalten. */
+    public void off() {
+        submit(() -> send("{\"method\":\"setPilot\",\"params\":{\"state\":false}}"));
+    }
+
     /** Warmweiss (Kelvin), z. B. fuer Kino-Modus. */
     public void white(int kelvin, int dimming) {
         submit(() -> {
             curDim = dimming;
             curR = 255; curG = kelvin < 3000 ? 160 : 200; curB = kelvin < 3000 ? 90 : 150;  // grobe Naeherung fuer naechsten Fade
-            send("{\"method\":\"setPilot\",\"params\":{\"temp\":" + kelvin + ",\"dimming\":" + Math.max(10, dimming) + "}}");
+            send("{\"method\":\"setPilot\",\"params\":{\"state\":true,\"temp\":" + kelvin + ",\"dimming\":" + Math.max(10, dimming) + "}}");
         });
     }
 

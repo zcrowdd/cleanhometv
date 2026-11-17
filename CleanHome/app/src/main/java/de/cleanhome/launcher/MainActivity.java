@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
 
     /** Zeitpunkt, an dem CleanHome bewusst eine App gestartet hat (dann kein Standbild zeigen). */
     static volatile long lastLeftByLaunch;
+    static volatile boolean createdThisBoot;     // false nach Neustart, bis CleanHome einmal offen war
     static final String EXTRA_SAVER = "cleanhome_saver";
     static final String EXTRA_RETURN_PKG = "cleanhome_return_pkg";
     private String saverReturnPkg;      // nach dem Ruhebildschirm in diese App zurueck
@@ -199,7 +200,10 @@ public class MainActivity extends Activity {
         inst = new java.lang.ref.WeakReference<>(this);
         setContentView(buildUi());
         readPcExtras(getIntent());
+        createdThisBoot = true;
+        startRemote();
         HomeWatchService.start(this);
+        KeepAliveJob.schedule(this);
         initMedia();
         android.content.IntentFilter sf = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
         sf.addAction(Intent.ACTION_SCREEN_ON);
@@ -262,6 +266,7 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         releaseMedia();
+        if (remote != null) remote.stop();
         try { unregisterReceiver(screenReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(packageReceiver); } catch (Exception ignored) { }
         ui.removeCallbacksAndMessages(null);
@@ -304,6 +309,10 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
+        if (qrLayer != null) {
+            if (e.getAction() == KeyEvent.ACTION_UP) { final View q = qrLayer; qrLayer = null; q.animate().alpha(0f).setDuration(150).withEndAction(() -> root.removeView(q)).start(); }
+            return true;
+        }
         // PC-Start-Overlay: Zurueck bricht ab, sonst nichts durchlassen
         if (pcLayer != null && pcLayer.getVisibility() == View.VISIBLE) {
             if (k == KeyEvent.KEYCODE_BACK && e.getAction() == KeyEvent.ACTION_UP) { pcCancel = true; hidePcLayer(); }
@@ -1147,6 +1156,7 @@ public class MainActivity extends Activity {
             toast(n ? "RAM wird vor jedem App-Start freigemacht" : "Automatisches Freimachen aus");
         }));
         items.add(new MItem("CLEANHOME", null));
+        items.add(new MItem("📱  Handy-Steuerung (QR-Code)", this::showRemoteQr));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
         items.add(new MItem("Govee-Licht  ·  " + (goveeOn ? "dimmt bei Streaming" : "aus"), this::openGoveeMenu));
@@ -1700,14 +1710,17 @@ public class MainActivity extends Activity {
                 if (k == K_VIDEO && (s == P || s == PA) && (video == null || s == P)) { video = c; videoState = s; }
                 if (k != K_VIDEO && s == P && c.getMetadata() != null && music == null) music = c;
             }
-            if (video != null && videoState == P) t = new int[]{1, 2200, 10};          // Film laeuft -> Kino
-            else if (video != null) t = new int[]{1, 2700, 35};                        // Film pausiert -> etwas heller
-            else if (music != null && npCtrl == music) t = new int[]{0, npColor, 70};  // Musik in anderer App
-            else if (appKind(fgPkg()) == K_VIDEO) t = new int[]{1, 2400, 20};  // Streaming-App, Menue
-            else {
-                AppInfo a = find(fgPkg());
-                t = new int[]{0, a != null ? a.color : lastAppColor, 60};              // andere App
-            }
+            // In jeder App leuchtet das Licht in ihrer Markenfarbe (Netflix rot, Disney+ blau ...),
+            // nur die Helligkeit richtet sich danach, was gerade passiert.
+            String fg = fgPkg();
+            int brand = brandColor(fg);
+            boolean justLaunched = android.os.SystemClock.uptimeMillis() - launchFlashAt < 2500;
+            if (video != null && videoState == P) t = new int[]{0, brand, 12};         // Film laeuft -> Markenfarbe, ganz dunkel
+            else if (video != null) t = new int[]{0, brand, 30};                       // Film pausiert -> etwas heller
+            else if (music != null && npCtrl == music && appKind(fg) != K_AUDIO) t = new int[]{0, npColor, 70};  // Musik aus anderer App
+            else if (appKind(fg) == K_VIDEO) t = new int[]{0, brand, 40};              // Streaming-App, Menue
+            else t = new int[]{0, brand, 60};                                          // andere App
+            if (justLaunched) t[2] = 85;                                               // beim Start kurz kraeftig
         }
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         if ((h >= 23 || h < 6) && screenOn) t[2] = Math.min(t[2], 35);               // nachts gedaempft
@@ -1723,6 +1736,45 @@ public class MainActivity extends Activity {
         ui.postDelayed(applyLights, delayMs);
     }
 
+    private long launchFlashAt;
+
+    /** Markenfarben bekannter Apps; sonst die aus dem App-Logo berechnete Farbe. */
+    private static final java.util.Map<String, Integer> BRAND = new java.util.HashMap<>();
+    static {
+        BRAND.put("com.netflix.ninja", 0xFFE50914);
+        BRAND.put("com.amazon.avod", 0xFF00A8E1);
+        BRAND.put("com.disney.disneyplus", 0xFF113CCF);
+        BRAND.put("com.amazon.firetv.youtube", 0xFFFF0000);
+        BRAND.put("com.google.android.youtube.tv", 0xFFFF0000);
+        BRAND.put("com.liskovsoft.smarttubetv", 0xFFFF0000);
+        BRAND.put("com.liskovsoft.smarttubetv.beta", 0xFFFF0000);
+        BRAND.put("com.spotify.tv.android", 0xFF1DB954);
+        BRAND.put("tv.twitch.android.app", 0xFF9146FF);
+        BRAND.put("com.wbd.stream", 0xFF002BE7);
+        BRAND.put("com.zdf.android.mediathek", 0xFFFA7D19);
+        BRAND.put("de.swr.ard.avp.mobile.android.amazon", 0xFF0060AF);
+        BRAND.put("com.plexapp.android", 0xFFE5A00D);
+        BRAND.put("org.xbmc.kodi", 0xFF17B2E7);
+        BRAND.put("com.amazon.mp3", 0xFF25D1DA);
+        BRAND.put("deezer.android.tv", 0xFFA238FF);
+        BRAND.put("com.apple.android.music", 0xFFFA243C);
+        BRAND.put("com.apple.atve.amazon.appletv", 0xFFAAAAAA);
+        BRAND.put("de.prosiebensat1digital.seventv", 0xFFFFDD00);
+        BRAND.put("com.dazn", 0xFFF8FF13);
+        BRAND.put("com.sky.wow", 0xFF00E68A);
+        BRAND.put("de.rtl.plus", 0xFFFF3C00);
+        BRAND.put("com.crunchyroll.crunchyroid", 0xFFF47521);
+        BRAND.put("com.limelight", C_GAMING);
+    }
+
+    private int brandColor(String pkg) {
+        if (pkg == null) return lastAppColor;
+        Integer b = BRAND.get(pkg);
+        if (b != null) return b;
+        AppInfo a = find(pkg);
+        return a != null ? a.color : lastAppColor;
+    }
+
     /** App, die gerade wirklich vorne ist (vom Waechter gemeldet, sonst die zuletzt gestartete). */
     private String fgPkg() {
         String f = HomeWatchService.lastForegroundPkg;
@@ -1736,7 +1788,28 @@ public class MainActivity extends Activity {
         if (a != null) a.ui.post(() -> a.scheduleLights(300));
     }
 
+    private String lightManual;   // vom Handy gesetzt: "bright" / "dim" / "off", null = Automatik
+    private String lightManualSent;
+
     private void applyLightsNow() {
+        if (lightManual != null) {
+            if (lightManual.equals(lightManualSent)) return;
+            lightManualSent = lightManual;
+            lightKey = null;
+            boolean w = wiz.hasLamps(), g = govee.hasLamps();
+            switch (lightManual) {
+                case "bright": if (w) wiz.white(3200, 100); if (g) { govee.power(true); govee.brightness(100); } break;
+                case "dim":    if (w) wiz.white(2400, 20);  if (g) { govee.power(true); govee.brightness(15); } break;
+                default:       if (w) wiz.off();            if (g) govee.power(false); break;
+            }
+            return;
+        }
+        if (lightManualSent != null) {             // zurueck zur Automatik
+            if ("off".equals(lightManualSent) && govee.hasLamps()) govee.power(true);
+            lightManualSent = null;
+            lightKey = null;
+            govee.forget();
+        }
         applyGovee();
         if (!wizOn || !wiz.hasLamps()) return;
         if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) { sendSaverLights(); return; }
@@ -1758,7 +1831,11 @@ public class MainActivity extends Activity {
     private void wizOnFocusColor(int color) { lastAppColor = color; scheduleLights(250); }
     private void wizOnCover(int color) { scheduleLights(150); }
     private void wizHome() { homeVisible = true; scheduleLights(50); }
-    private void wizLaunch() { scheduleLights(400); }
+    private void wizLaunch() {
+        launchFlashAt = android.os.SystemClock.uptimeMillis();
+        scheduleLights(400);
+        ui.postDelayed(() -> scheduleLights(0), 2700);   // nach dem kurzen Aufleuchten in den passenden Modus
+    }
     private void wizSaver(boolean on) { scheduleLights(on ? 0 : 50); }
 
     private final android.content.BroadcastReceiver screenReceiver = new android.content.BroadcastReceiver() {
@@ -1768,6 +1845,173 @@ public class MainActivity extends Activity {
             scheduleLights(screenOn ? 300 : 0);
         }
     };
+
+    // ================================================================ Handy-Steuerung
+
+    private RemoteServer remote;
+    private FrameLayout qrLayer;
+
+    private String remoteKey() {
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String k = p.getString("remote_key", null);
+        if (k == null) {
+            String abc = "abcdefghjkmnpqrstuvwxyz23456789";
+            StringBuilder b = new StringBuilder();
+            java.security.SecureRandom r = new java.security.SecureRandom();
+            for (int i = 0; i < 10; i++) b.append(abc.charAt(r.nextInt(abc.length())));
+            k = b.toString();
+            p.edit().putString("remote_key", k).apply();
+        }
+        return k;
+    }
+
+    private String remoteUrl() { return "http://" + localIp() + ":" + RemoteServer.PORT + "/?k=" + remoteKey(); }
+
+    private void startRemote() {
+        if (remote != null) remote.stop();
+        remote = new RemoteServer(remoteKey(), this::remoteApi);
+        remote.start();
+    }
+
+    /** Befehle vom Handy (laeuft im Server-Thread; alles mit Oberflaeche geht ueber ui.post). */
+    private String remoteApi(String cmd, java.util.Map<String, String> q) {
+        switch (cmd) {
+            case "apps": {
+                org.json.JSONArray arr = new org.json.JSONArray();
+                final List<AppInfo> copy = new ArrayList<>();
+                final Object lock = new Object();
+                final boolean[] done = {false};
+                ui.post(() -> { synchronized (lock) { for (AppInfo a : apps) if (!hidden.contains(a.pkg)) copy.add(a); done[0] = true; lock.notifyAll(); } });
+                synchronized (lock) { long end = System.currentTimeMillis() + 2000; while (!done[0] && System.currentTimeMillis() < end) { try { lock.wait(200); } catch (InterruptedException ignored) { } } }
+                try {
+                    for (AppInfo a : copy) {
+                        org.json.JSONObject o = new org.json.JSONObject();
+                        o.put("n", a.label); o.put("p", a.pkg); o.put("c", brandColor(a.pkg));
+                        arr.put(o);
+                    }
+                    return new org.json.JSONObject().put("apps", arr).toString();
+                } catch (Exception e) { return "{\"apps\":[]}"; }
+            }
+            case "launch": {
+                String pk = q.get("p");
+                ui.post(() -> {
+                    AppInfo a = find(pk);
+                    if (a != null) { hideSaver(); launch(a); }
+                });
+                return null;
+            }
+            case "vol": {
+                android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+                String d = q.get("d");
+                int dir = "up".equals(d) ? android.media.AudioManager.ADJUST_RAISE
+                        : "down".equals(d) ? android.media.AudioManager.ADJUST_LOWER
+                        : android.media.AudioManager.ADJUST_TOGGLE_MUTE;
+                try { am.adjustStreamVolume(android.media.AudioManager.STREAM_MUSIC, dir, android.media.AudioManager.FLAG_SHOW_UI); } catch (Exception ignored) { }
+                return null;
+            }
+            case "media": {
+                String a = q.get("a");
+                int key = "next".equals(a) ? KeyEvent.KEYCODE_MEDIA_NEXT
+                        : "prev".equals(a) ? KeyEvent.KEYCODE_MEDIA_PREVIOUS : KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE;
+                android.media.AudioManager am = (android.media.AudioManager) getSystemService(AUDIO_SERVICE);
+                try {
+                    am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_DOWN, key));
+                    am.dispatchMediaKeyEvent(new KeyEvent(KeyEvent.ACTION_UP, key));
+                } catch (Exception ignored) { }
+                return null;
+            }
+            case "light": {
+                String m = q.get("m");
+                ui.post(() -> {
+                    lightManual = "auto".equals(m) ? null : m;
+                    scheduleLights(0);
+                });
+                return null;
+            }
+            case "home":
+            case "saver": {
+                final boolean sv = cmd.equals("saver");
+                ui.post(() -> {
+                    try {
+                        startActivity(new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+                    } catch (Exception ignored) { }
+                    if (sv) ui.postDelayed(() -> { hideMenu(); showSaver.run(); }, 600);
+                });
+                return null;
+            }
+            case "pc": {
+                if (!pcMac().isEmpty()) new Thread(() -> { for (int i = 0; i < 3; i++) sendWol(pcMac(), pcIp()); }).start();
+                return "{\"ok\":" + !pcMac().isEmpty() + "}";
+            }
+            case "status": {
+                try {
+                    org.json.JSONObject o = new org.json.JSONObject();
+                    android.media.session.MediaController c = npCtrl;
+                    if (c != null && c.getMetadata() != null) {
+                        android.media.MediaMetadata md = c.getMetadata();
+                        o.put("title", md.getString(android.media.MediaMetadata.METADATA_KEY_TITLE));
+                        o.put("artist", md.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST));
+                        o.put("playing", stateOf(c) == android.media.session.PlaybackState.STATE_PLAYING);
+                        AppInfo a = find(c.getPackageName());
+                        if (a != null) o.put("app", a.label);
+                    }
+                    String fg = homeVisible ? null : fgPkg();
+                    AppInfo f = fg != null ? find(fg) : null;
+                    o.put("front", f != null ? "Auf dem TV: " + f.label : "Auf dem TV: CleanHome");
+                    return o.toString();
+                } catch (Exception e) { return "{}"; }
+            }
+        }
+        return "{\"ok\":false}";
+    }
+
+    private void showRemoteQr() {
+        hideMenu();
+        if (qrLayer != null) { root.removeView(qrLayer); qrLayer = null; }
+        String url = remoteUrl();
+        FrameLayout l = new FrameLayout(this);
+        l.setBackgroundColor(0xF2000000);
+        l.setClickable(true);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+        TextView h = tv(30, WHITE, fBold);
+        h.setText("Handy-Steuerung");
+        box.addView(h);
+        TextView sub = tv(15, GRAY_1, fRegular);
+        sub.setText("Mit der Handy-Kamera scannen – das Handy muss im selben WLAN sein");
+        sub.setPadding(0, dp(8), 0, dp(26));
+        box.addView(sub);
+        ImageView qr = new ImageView(this);
+        try {
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter()
+                    .encode(url, com.google.zxing.BarcodeFormat.QR_CODE, 0, 0);
+            int w = m.getWidth(), hgt = m.getHeight(), q = 2;
+            Bitmap bm = Bitmap.createBitmap(w + q * 2, hgt + q * 2, Bitmap.Config.RGB_565);
+            bm.eraseColor(0xFFFFFFFF);
+            for (int y = 0; y < hgt; y++) for (int x = 0; x < w; x++) if (m.get(x, y)) bm.setPixel(x + q, y + q, 0xFF000000);
+            android.graphics.drawable.BitmapDrawable bd = new android.graphics.drawable.BitmapDrawable(getResources(), bm);
+            bd.setFilterBitmap(false);           // scharfe Kanten beim Vergroessern
+            qr.setImageDrawable(bd);
+        } catch (Exception e) { qr.setBackgroundColor(0xFF333333); }
+        qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        qr.setBackground(rounded(0xFFFFFFFF, 0xFFFFFFFF, 14));
+        qr.setPadding(dp(14), dp(14), dp(14), dp(14));
+        box.addView(qr, new LinearLayout.LayoutParams(dp(300), dp(300)));
+        TextView u = tv(14, GRAY_2, fMono);
+        u.setText(url);
+        u.setPadding(0, dp(20), 0, 0);
+        box.addView(u);
+        TextView hint = tv(13, GRAY_2, fRegular);
+        hint.setText("Tipp: auf dem Handy „Zum Startbildschirm hinzufügen“ – dann ist es wie eine App.   ·   Beliebige Taste schließt");
+        hint.setPadding(0, dp(14), 0, 0);
+        box.addView(hint);
+        l.addView(box, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        l.setAlpha(0f);
+        root.addView(l, new FrameLayout.LayoutParams(-1, -1));
+        l.animate().alpha(1f).setDuration(200).start();
+        qrLayer = l;
+    }
 
     // ================================================================ Govee (nur Helligkeit, nie Farbe)
 
@@ -1899,9 +2143,10 @@ public class MainActivity extends Activity {
         String[] rules = {
                 "Home Screen  → Farbe der markierten App",
                 "Musik läuft  → Farbe des Covers",
-                "Film läuft  → Kino: warm, 10 %",
-                "Film pausiert  → warm, 35 %",
-                "Streaming-App im Menü  → warm, 20 %",
+                "In jeder App  → Markenfarbe (Netflix rot, Disney+ blau …)",
+                "Film läuft  → Markenfarbe, 12 %",
+                "Film pausiert  → Markenfarbe, 30 %",
+                "Streaming-App im Menü  → Markenfarbe, 40 %",
                 "PC-Gaming / Moonlight  → lila",
                 "Ruhebildschirm  → Farben der Bildschirm-Ecken",
                 "Fernseher aus  → normales Licht, 50 %",
@@ -2444,13 +2689,48 @@ public class MainActivity extends Activity {
         return g;
     }
 
+    private volatile int goveeBase;      // aktuelle Farbe der Govee-LEDs (0 = unbekannt / keine Govee)
+
+    /** Govee-Farbe im Hintergrund abfragen; aendert sie sich, werden die Ecken sofort angepasst. */
+    private void pollGoveeColor() {
+        if (goveeIps.isEmpty()) { goveeBase = 0; return; }
+        new Thread(() -> {
+            int c = govee.currentColor();
+            if (c == 0) return;
+            int old = goveeBase;
+            goveeBase = c;
+            if (colorDist(old, c) > 40) ui.post(() -> {
+                if (saver != null && saver.getVisibility() == View.VISIBLE) { ui.removeCallbacks(cornerTick); ui.post(cornerTick); }
+            });
+        }, "goveeColor").start();
+    }
+
+    private static int colorDist(int a, int b) {
+        return Math.abs(Color.red(a) - Color.red(b)) + Math.abs(Color.green(a) - Color.green(b)) + Math.abs(Color.blue(a) - Color.blue(b));
+    }
+
+    /** Ecken-Farbe: mit Govee = Toene rund um die Govee-Farbe (leicht wandernd), sonst die Farbpalette. */
+    private int cornerColor(int c) {
+        int base = goveeBase;
+        if (base == 0) return PALETTE[(CORNER_OFS[c] + cornerStep) % PALETTE.length];
+        float[] hsv = new float[3];
+        Color.colorToHSV(base, hsv);
+        float[] shift = {0f, 16f, -16f, 30f};
+        float wobble = (float) Math.sin((cornerStep + c * 1.7) * 0.9) * 8f;
+        hsv[0] = (hsv[0] + shift[c] + wobble + 360f) % 360f;
+        hsv[1] = hsv[1] < 0.15f ? hsv[1] : Math.min(1f, Math.max(0.55f, hsv[1]));
+        hsv[2] = Math.max(0.75f, hsv[2]);
+        return Color.HSVToColor(hsv);
+    }
+
     private final Runnable cornerTick = new Runnable() {
         @Override public void run() {
             if (saver == null || saver.getVisibility() != View.VISIBLE) return;
             cornerStep++;
+            pollGoveeColor();
             int size = cornerHolders[0] != null ? cornerHolders[0].getLayoutParams().width : dp(700);
             for (int c = 0; c < 4; c++) {
-                int col = PALETTE[(CORNER_OFS[c] + cornerStep) % PALETTE.length];
+                int col = cornerColor(c);
                 cornerCols[c] = col;
                 int back = 1 - cornerFront[c];
                 View nb = cornerViews[c][back], of = cornerViews[c][cornerFront[c]];
@@ -2469,7 +2749,7 @@ public class MainActivity extends Activity {
 
     /** Die Lampen uebernehmen die Ecken-Farben (Lampe 1 = oben links, 2 = oben rechts, ...). */
     private void sendSaverLights() {
-        if (!wizOn || !wiz.hasLamps()) return;
+        if (lightManual != null || !wizOn || !wiz.hasLamps()) return;
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         int dim = (h >= 23 || h < 6) ? 25 : 45;
         lightKey = "saver" + cornerStep;           // beim Verlassen wird sicher neu gesendet

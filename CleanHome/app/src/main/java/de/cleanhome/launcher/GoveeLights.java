@@ -50,6 +50,12 @@ public class GoveeLights {
         });
     }
 
+    /** Ein/aus. Nach dem Einschalten wird die Helligkeit neu gesendet. */
+    public void power(boolean on) {
+        lastBrightness = -1;
+        worker.submit(() -> send("{\"msg\":{\"cmd\":\"turn\",\"data\":{\"value\":" + (on ? 1 : 0) + "}}}"));
+    }
+
     public void forget() { lastBrightness = -1; }
 
     /** Zum Erkennen: kurz dunkel, dann wieder hell. */
@@ -61,6 +67,52 @@ public class GoveeLights {
             }
             lastBrightness = -1;
         });
+    }
+
+    /**
+     * Aktuelle Farbe des ersten Govee-Lichts abfragen (blockiert bis ~1 s, NICHT im UI-Thread aufrufen).
+     * Rueckgabe: Farbe (0xFFrrggbb) oder 0, wenn aus / keine Antwort.
+     */
+    public int currentColor() {
+        String ip;
+        synchronized (this) { if (ips.isEmpty()) return 0; ip = ips.get(0); }
+        try (DatagramSocket rx = new DatagramSocket(null)) {
+            rx.setReuseAddress(true);
+            rx.bind(new InetSocketAddress(LISTEN_PORT));
+            rx.setSoTimeout(500);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                sendTo(ip, "{\"msg\":{\"cmd\":\"devStatus\",\"data\":{}}}");
+                long end = System.currentTimeMillis() + 700;
+                while (System.currentTimeMillis() < end) {
+                    try {
+                        byte[] buf = new byte[1024];
+                        DatagramPacket p = new DatagramPacket(buf, buf.length);
+                        rx.receive(p);
+                        String txt = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8);
+                        if (!txt.contains("devStatus")) continue;
+                        JSONObject d = new JSONObject(txt).getJSONObject("msg").getJSONObject("data");
+                        if (d.optInt("onOff", 1) == 0) return 0;
+                        JSONObject c = d.optJSONObject("color");
+                        int r = c != null ? c.optInt("r") : 0, g = c != null ? c.optInt("g") : 0, b = c != null ? c.optInt("b") : 0;
+                        int k = d.optInt("colorTemInKelvin", 0);
+                        if (r + g + b == 0 && k > 0) return kelvinToRgb(k);
+                        if (r + g + b == 0) return 0;
+                        return 0xFF000000 | (r << 16) | (g << 8) | b;
+                    } catch (SocketTimeoutException ignored) { break; }
+                }
+            }
+        } catch (Exception ignored) { }
+        return 0;
+    }
+
+    /** Grobe Umrechnung Farbtemperatur -> RGB (fuer Weiss-Modus). */
+    private static int kelvinToRgb(int k) {
+        double t = k / 100.0, r, g, b;
+        r = t <= 66 ? 255 : 329.7 * Math.pow(t - 60, -0.1332);
+        g = t <= 66 ? 99.47 * Math.log(t) - 161.1 : 288.1 * Math.pow(t - 60, -0.0755);
+        b = t >= 66 ? 255 : (t <= 19 ? 0 : 138.5 * Math.log(t - 10) - 305.0);
+        int ri = (int) Math.max(0, Math.min(255, r)), gi = (int) Math.max(0, Math.min(255, g)), bi = (int) Math.max(0, Math.min(255, b));
+        return 0xFF000000 | (ri << 16) | (gi << 8) | bi;
     }
 
     /** Sucht Govee-Geraete mit eingeschalteter LAN-Steuerung (~3 s). */
