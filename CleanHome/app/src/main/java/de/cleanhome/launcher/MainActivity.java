@@ -1100,7 +1100,10 @@ public class MainActivity extends Activity {
         List<MItem> items = new ArrayList<>();
         // Fire-TV-Bereiche direkt (ohne Amazons Startseite), Zurueck fuehrt wieder zu CleanHome
         items.add(new MItem("FIRE TV", null));
-        for (String[] fs : FIRE_SETTINGS) items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
+        for (String[] fs : FIRE_SETTINGS) {
+            if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
+            else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
+        }
         items.add(new MItem("CLEANHOME", null));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
@@ -2516,15 +2519,16 @@ public class MainActivity extends Activity {
     }
 
     /** Direkte Einstiege in Amazons Einstellungs-App (ausgelesen von deinem Stick). */
+    // {Name, Aktion, "1" = von Amazon geschuetzt (signature|privileged|amazon) -> nur ueber Amazon moeglich}
     private static final String[][] FIRE_SETTINGS = {
-            {"Netzwerk", "android.settings.WIRELESS_SETTINGS"},
-            {"Bild & Ton", "com.amazon.device.settings.action.DISPLAY_AND_SOUNDS"},
-            {"Apps", "com.amazon.device.settings.action.APPLICATIONS"},
-            {"Fernbedienungen & Bluetooth", "com.amazon.device.settings.action.CONTROLLERS"},
-            {"Präferenzen (Datenschutz, Werbung, Sprache)", "com.amazon.device.settings.action.PREFERENCES"},
-            {"Bedienungshilfen", "com.amazon.device.settings.action.ACCESSIBILITY"},
-            {"Konto & Profil", "com.amazon.device.settings.action.MY_ACCOUNT"},
-            {"Mein Fire TV (Info, Neustart, Entwickler)", "com.amazon.device.settings.action.DEVICE"},
+            {"Netzwerk", "android.settings.WIRELESS_SETTINGS", "0"},
+            {"Apps", "com.amazon.device.settings.action.APPLICATIONS", "0"},
+            {"Fernbedienungen & Bluetooth", "com.amazon.device.settings.action.CONTROLLERS", "0"},
+            {"Mein Fire TV (Info, Neustart, Entwickler)", "com.amazon.device.settings.action.DEVICE", "0"},
+            {"Bild & Ton", "", "1"},
+            {"Präferenzen (Datenschutz, Werbung, Sprache)", "", "1"},
+            {"Bedienungshilfen", "", "1"},
+            {"Konto & Profil", "", "1"},
     };
     private static final String FIRE_SETTINGS_PKG = "com.amazon.tv.settings.v2";
 
@@ -2544,12 +2548,13 @@ public class MainActivity extends Activity {
             try {
                 startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             } catch (Exception e2) {
-                openSystemSettings();      // letzter Ausweg: der alte Weg
+                toast("Diese Seite lässt Amazon nicht direkt öffnen");
             }
         }
     }
 
     private void openSystemSettings() {
+        toast("Öffnet über Amazon – mit Zurück kommst du wieder hierher");
         lastLaunchedPkg = "system.settings";
         lastLeftByLaunch = System.currentTimeMillis();
         settingsOpenedAt = System.currentTimeMillis();
