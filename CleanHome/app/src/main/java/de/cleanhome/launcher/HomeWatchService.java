@@ -92,6 +92,12 @@ public class HomeWatchService extends Service {
                     // Nur die echte Amazon-STARTSEITE zaehlt - andere Bildschirme derselben App
                     // (z. B. Einstellungen, Profile, Suche) duerfen ganz normal offen bleiben.
                     if (!line.contains("HomeActivity")) continue;
+                    // Fire-TV-Einstellungen laufen ueber Amazons Startseiten-App und sehen im Protokoll
+                    // wie "Home gedrueckt" aus. Kurz nach dem Oeffnen deshalb ALLES ignorieren.
+                    if (System.currentTimeMillis() - MainActivity.settingsOpenedAt < 4000) {
+                        Log.i(TAG, "Einstellungen geoeffnet - ignoriere");
+                        continue;
+                    }
                     if (line.contains("category.HOME")) {
                         // Home-Taste gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
                         Log.i(TAG, "Home erkannt");

@@ -78,6 +78,8 @@ public class MainActivity extends Activity {
 
     /** Zeitpunkt, an dem CleanHome bewusst eine App gestartet hat (dann kein Standbild zeigen). */
     static volatile long lastLeftByLaunch;
+    /** Zeitpunkt, an dem die Fire-TV-Einstellungen geoeffnet wurden (Waechter pausiert kurz). */
+    static volatile long settingsOpenedAt;
     /** true, solange CleanHome wirklich vorne ist (fuer das Standbild). */
     static volatile boolean isFront;
     /** Leistungsmodus fuer schwache Geraete (z. B. Fire TV Stick 3. Gen mit 1 GB RAM). */
@@ -2505,6 +2507,7 @@ public class MainActivity extends Activity {
     private void openSystemSettings() {
         lastLaunchedPkg = "system.settings";
         lastLeftByLaunch = System.currentTimeMillis();
+        settingsOpenedAt = System.currentTimeMillis();
         try {
             startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception e) {
