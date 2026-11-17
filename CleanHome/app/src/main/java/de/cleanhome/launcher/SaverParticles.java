@@ -18,6 +18,8 @@ public class SaverParticles extends View {
     private int accent = 0xFF0A72EF;
     private long last;
 
+    @Override public boolean hasOverlappingRendering() { return false; }
+
     public SaverParticles(Context c, boolean lite) {
         super(c);
         n = lite ? 22 : 46;

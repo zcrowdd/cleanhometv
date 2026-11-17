@@ -31,6 +31,10 @@ public class SaverClock extends View {
     private boolean running;
     private float cellW, colonW, textH, ascent;
     private static final long ROLL_MS = 700;
+    private final Calendar cal = Calendar.getInstance();
+    private final String[] DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+
+    private String d(char c) { return c >= '0' && c <= '9' ? DIGITS[c - '0'] : String.valueOf(c); }
 
     public SaverClock(Context c, Typeface tf, float sizePx) {
         super(c);
@@ -67,13 +71,16 @@ public class SaverClock extends View {
         return 0xFF000000 | (r << 16) | (g << 8) | bl;
     }
 
-    public void start() { running = true; tick(); }
-    public void stop() { running = false; }
+    public void start() { removeCallbacks(tickRunnable); running = true; tick(); }
+    public void stop() { running = false; removeCallbacks(tickRunnable); }
 
     private String now() {
-        Calendar c = Calendar.getInstance();
+        Calendar c = cal;
+        c.setTimeInMillis(System.currentTimeMillis());
         return String.format(java.util.Locale.GERMANY, "%02d:%02d", c.get(Calendar.HOUR_OF_DAY), c.get(Calendar.MINUTE));
     }
+
+    private final Runnable tickRunnable = this::tick;
 
     private void tick() {
         if (!running) return;
@@ -86,7 +93,7 @@ public class SaverClock extends View {
         invalidate();
         // waehrend der Roll-Animation fluessig, sonst nur fuer Doppelpunkt und Sekunden-Balken
         long roll = SystemClock.uptimeMillis() - changedAt;
-        postDelayed(this::tick, roll < ROLL_MS ? 16 : 50);
+        postDelayed(tickRunnable, roll < ROLL_MS ? 16 : 50);
     }
 
     @Override
@@ -126,13 +133,13 @@ public class SaverClock extends View {
                 c.save();
                 c.clipRect(x, 0, x + cellW, textH + 4 * density);
                 digit.setAlpha((int) (255 * (1 - ease)));
-                c.drawText(String.valueOf(old), cx, ascent - shift * ease, digit);
+                c.drawText(d(old), cx, ascent - shift * ease, digit);
                 digit.setAlpha((int) (255 * ease));
-                c.drawText(String.valueOf(ch), cx, ascent + shift * (1 - ease), digit);
+                c.drawText(d(ch), cx, ascent + shift * (1 - ease), digit);
                 digit.setAlpha(255);
                 c.restore();
             } else {
-                c.drawText(String.valueOf(ch), cx, ascent, digit);
+                c.drawText(d(ch), cx, ascent, digit);
             }
             x += cellW;
         }
@@ -140,7 +147,8 @@ public class SaverClock extends View {
         float y = textH + 20 * density;
         float bw = total * 0.42f, bx = (getWidth() - bw) / 2f;
         c.drawLine(bx, y, bx + bw, y, track);
-        Calendar cal = Calendar.getInstance();
+        Calendar cal = this.cal;
+        cal.setTimeInMillis(System.currentTimeMillis());
         float sec = (cal.get(Calendar.SECOND) + cal.get(Calendar.MILLISECOND) / 1000f) / 60f;
         bar.setColor(accent);
         c.drawLine(bx, y, bx + Math.max(2, bw * sec), y, bar);

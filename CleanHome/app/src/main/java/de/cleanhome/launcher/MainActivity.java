@@ -202,6 +202,10 @@ public class MainActivity extends Activity {
         loadGovee();
         inst = new java.lang.ref.WeakReference<>(this);
         setContentView(buildUi());
+        root.post(() -> {                     // Hintergrundbild deckt alles -> zwei Vollbild-Fuellungen pro Frame sparen
+            root.setBackground(null);
+            getWindow().setBackgroundDrawable(null);
+        });
         readPcExtras(getIntent());
         createdThisBoot = true;
         startRemote();
@@ -237,6 +241,7 @@ public class MainActivity extends Activity {
         if (msm == null) initMedia();     // z. B. wenn die Berechtigung erst jetzt erteilt wurde
         wizHome();
         resetIdle();
+        for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isPaused()) a.resume();
     }
 
     /** Standbild des Home Screens merken, damit es beim naechsten Home-Druck sofort da ist. */
@@ -263,6 +268,7 @@ public class MainActivity extends Activity {
         hideSaver();
         homeVisible = false;
         scheduleLights(400);
+        for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isRunning()) a.pause();
     }
 
     @Override
@@ -2643,7 +2649,7 @@ public class MainActivity extends Activity {
         saverContent.setScaleX(0.96f); saverContent.setScaleY(0.96f);
         saverContent.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(250).setDuration(1400)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
-        saver.animate().alpha(1f).setDuration(900).start();
+        saver.animate().alpha(1f).setDuration(900).withEndAction(this::hideUnderSaver).start();
         wizSaver(true);
         saverContent.setTranslationX(0);
         saverContent.setTranslationY(0);
@@ -2652,6 +2658,23 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(this.cornerTick);
         ui.post(this.cornerTick);
     };
+
+    // Der Ruhebildschirm deckt alles ab - der Home Screen darunter muss dann nicht jedes Frame mitgezeichnet werden.
+    private final List<View> hiddenUnderSaver = new ArrayList<>();
+
+    private void hideUnderSaver() {
+        if (saver == null || saver.getVisibility() != View.VISIBLE || saver.getAlpha() < 1f) return;
+        int idx = root.indexOfChild(saver);
+        for (int i = 0; i < idx; i++) {
+            View v = root.getChildAt(i);
+            if (v.getVisibility() == View.VISIBLE) { v.setVisibility(View.INVISIBLE); hiddenUnderSaver.add(v); }
+        }
+    }
+
+    private void showUnderSaver() {
+        for (View v : hiddenUnderSaver) v.setVisibility(View.VISIBLE);
+        hiddenUnderSaver.clear();
+    }
 
     private final Runnable driftTick = new Runnable() {
         @Override public void run() {
@@ -2675,6 +2698,7 @@ public class MainActivity extends Activity {
 
     private void hideSaver() {
         saverReturnPkg = null;
+        showUnderSaver();
         if (saver == null || saver.getVisibility() != View.VISIBLE) return;
         ui.removeCallbacks(driftTick);
         ui.removeCallbacks(cornerTick);
@@ -2700,7 +2724,7 @@ public class MainActivity extends Activity {
         g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
         g.setGradientRadius(size / 2f);
         int rgb = color & 0x00FFFFFF;
-        g.setColors(new int[]{0x99000000 | rgb, 0x40000000 | rgb, 0x00000000 | rgb});
+        g.setColors(new int[]{0x73000000 | rgb, 0x30000000 | rgb, 0x00000000 | rgb});   // = 0x99/0x40 x 0.75
         return g;
     }
 
@@ -2801,16 +2825,9 @@ public class MainActivity extends Activity {
 
     private FrameLayout buildSaver() {
         FrameLayout s = new FrameLayout(this);
-        s.setBackgroundColor(BLACK);
         s.setClickable(true);
-        s.addView(new GridBackground(this), new FrameLayout.LayoutParams(-1, -1));
-        GradientDrawable fade = new GradientDrawable();
-        fade.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-        fade.setGradientRadius(dp(520));
-        fade.setColors(new int[]{0x66000000, 0xE6000000, 0xFF000000});
-        View fv = new View(this);
-        fv.setBackground(fade);
-        s.addView(fv, new FrameLayout.LayoutParams(-1, -1));
+        // Schwarz + Raster + Abdunklung werden EINMAL in ein Bild gerechnet (vorher drei Vollbild-Ebenen)
+        s.addView(new SaverBackground(this), new FrameLayout.LayoutParams(-1, -1));
 
         // Farbflaechen in den vier Ecken, die langsam die Farbe wechseln und leicht wandern
         int[] grav = {Gravity.TOP | Gravity.START, Gravity.TOP | Gravity.END,
@@ -2828,7 +2845,6 @@ public class MainActivity extends Activity {
             FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(size, size, grav[c]);
             if (c == 0 || c == 3) hl.leftMargin = off; else hl.rightMargin = off;
             if (c < 2) hl.topMargin = off; else hl.bottomMargin = off;
-            holder.setAlpha(0.75f);
             s.addView(holder, hl);
             cornerHolders[c] = holder;
             cornerCols[c] = PALETTE[CORNER_OFS[c] % PALETTE.length];
@@ -3365,6 +3381,37 @@ public class MainActivity extends Activity {
     }
 
     // ================================================================ Raster-Hintergrund
+
+    /** Ruhebildschirm-Hintergrund: sieht aus wie Schwarz + Raster + runde Abdunklung, ist aber ein einziges Bild. */
+    static class SaverBackground extends View {
+        private Bitmap cache;
+        SaverBackground(Context c) { super(c); }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int ow, int oh) {
+            if (w <= 0 || h <= 0) return;
+            float d = getResources().getDisplayMetrics().density;
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            c.drawColor(0xFF000000);
+            Paint p = new Paint();
+            p.setColor(0x14FFFFFF);
+            p.setStrokeWidth(Math.max(1f, d * 0.5f));
+            float step = 48 * d, x0 = (w % step) / 2f;
+            for (float x = x0; x <= w; x += step) c.drawLine(x, 0, x, h, p);
+            for (float y = 0; y <= h; y += step) c.drawLine(0, y, w, y, p);
+            Paint f = new Paint();
+            f.setShader(new android.graphics.RadialGradient(w / 2f, h / 2f, 520 * d,
+                    new int[]{0x66000000, 0xE6000000, 0xFF000000}, null, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, f);
+            cache = b;
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            if (cache != null) c.drawBitmap(cache, 0, 0, null);
+        }
+    }
 
     static class GridBackground extends View {
         private final Paint p = new Paint();
