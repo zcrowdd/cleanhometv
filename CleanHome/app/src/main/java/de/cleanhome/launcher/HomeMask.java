@@ -128,22 +128,21 @@ public final class HomeMask {
             try {
                 WindowManager wm = (WindowManager) c.getSystemService(Context.WINDOW_SERVICE);
                 FrameLayout v = buildLoader(c);
-                // Tasten waehrend der kurzen Ueberbrueckung abfangen, damit nichts in Amazons Menue landet
-                v.setFocusable(true);
-                v.setFocusableInTouchMode(true);
-                v.setOnKeyListener((vv, code, e) -> true);
+                // WICHTIG: das Overlay darf KEINEN Fokus nehmen. Sonst bekommt Amazons Startseite nie den
+                // Fokus, Android gibt die Home-Sperre nicht frei und CleanHome kommt gar nicht mehr nach vorne.
                 int type = Build.VERSION.SDK_INT >= 26
                         ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                         : WindowManager.LayoutParams.TYPE_PHONE;
                 WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                         WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, type,
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                                | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                                 | WindowManager.LayoutParams.FLAG_FULLSCREEN
                                 | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                         PixelFormat.OPAQUE);
                 lp.windowAnimations = 0;
                 wm.addView(v, lp);
-                v.requestFocus();
                 mask = v;
                 ui.removeCallbacks(autoHide);
                 ui.postDelayed(autoHide, MAX_SHOW_MS);       // Sicherheitsnetz
