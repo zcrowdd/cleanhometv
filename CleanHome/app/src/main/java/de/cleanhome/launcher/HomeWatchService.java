@@ -89,16 +89,21 @@ public class HomeWatchService extends Service {
                 String line;
                 while (running && (line = r.readLine()) != null) {
                     if (!line.contains(AMAZON_HOME)) continue;
+                    // Nur die echte Amazon-STARTSEITE zaehlt - andere Bildschirme derselben App
+                    // (z. B. Einstellungen, Profile, Suche) duerfen ganz normal offen bleiben.
+                    if (!line.contains("HomeActivity")) continue;
                     if (line.contains("category.HOME")) {
-                        // Home gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
+                        // Home-Taste gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
                         Log.i(TAG, "Home erkannt");
-                        HomeMask.show(this);               // sofort Standbild ueber Amazon legen
+                        HomeMask.show(this);
                         later(0, "home");
                         later(700, "home+700");
                     } else if (line.contains("am_set_resumed_activity") || line.contains("am_resume_activity")) {
-                        // Amazon ist wirklich vorne angekommen: sofort korrigieren
-                        Log.i(TAG, "Amazon vorne erkannt");
-                        if (System.currentTimeMillis() - MainActivity.lastLeftByLaunch > 4000) HomeMask.show(this);
+                        // Kurz nachdem CleanHome selbst etwas geoeffnet hat (App, Einstellungen):
+                        // nicht eingreifen, sonst springt man sofort zurueck.
+                        if (System.currentTimeMillis() - MainActivity.lastLeftByLaunch < 3000) continue;
+                        Log.i(TAG, "Amazon-Startseite vorne erkannt");
+                        HomeMask.show(this);
                         later(0, "resumed");
                     }
                 }

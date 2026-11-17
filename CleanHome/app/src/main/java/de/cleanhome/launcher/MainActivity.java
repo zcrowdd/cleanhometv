@@ -197,6 +197,13 @@ public class MainActivity extends Activity {
         android.content.IntentFilter sf = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
         sf.addAction(Intent.ACTION_SCREEN_ON);
         registerReceiver(screenReceiver, sf);
+        android.content.IntentFilter pf = new android.content.IntentFilter();
+        pf.addAction(Intent.ACTION_PACKAGE_ADDED);
+        pf.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        pf.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        pf.addAction(Intent.ACTION_PACKAGE_REPLACED);
+        pf.addDataScheme("package");
+        registerReceiver(packageReceiver, pf);
         if (b == null) showSplash();   // nur beim Kaltstart (z. B. nach dem Einschalten)
     }
 
@@ -204,7 +211,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         dateView.setText(new SimpleDateFormat("EEE, d. MMM", Locale.GERMANY).format(new Date()).toUpperCase(Locale.GERMANY));
-        loadApps();
+        if (appsDirty || apps.isEmpty()) loadApps();   // nur neu laden, wenn sich Apps geaendert haben
+        clearLaunchFx();
         ui.removeCallbacks(weatherTick); ui.post(weatherTick);
         ui.removeCallbacks(netTick); ui.post(netTick);
         isFront = true;
@@ -244,6 +252,7 @@ public class MainActivity extends Activity {
         super.onDestroy();
         releaseMedia();
         try { unregisterReceiver(screenReceiver); } catch (Exception ignored) { }
+        try { unregisterReceiver(packageReceiver); } catch (Exception ignored) { }
         ui.removeCallbacksAndMessages(null);
     }
 
@@ -319,9 +328,8 @@ public class MainActivity extends Activity {
     private View buildUi() {
         root = new FrameLayout(this);
         root.setBackgroundColor(BLACK);
-        GridBackground grid0 = new GridBackground(this);
-        grid0.setLayerType(View.LAYER_TYPE_HARDWARE, null);   // Raster nur einmal zeichnen, dann aus dem Cache
-        root.addView(grid0, new FrameLayout.LayoutParams(-1, -1));
+        // Raster + Rand-Abdunklung werden EINMAL in ein Bild gerechnet (statt zwei Vollbild-Ebenen pro Frame)
+        root.addView(new StaticBackground(this), new FrameLayout.LayoutParams(-1, -1));
 
         glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
@@ -333,7 +341,16 @@ public class MainActivity extends Activity {
         lg.topMargin = -dp(560);
         root.addView(g, lg);
 
-        root.addView(edgeFade(), new FrameLayout.LayoutParams(-1, -1));
+        // Spotlight: weicher Lichtschein hinter der markierten Kachel
+        spotDrawable = new GradientDrawable();
+        spotDrawable.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        spotDrawable.setGradientRadius(dp(SPOT / 2));
+        spotDrawable.setColors(new int[]{0x330A72EF, 0x000A72EF});
+        spot = new View(this);
+        spot.setBackground(spotDrawable);
+        spot.setAlpha(0f);
+        spot.setLayerType(View.LAYER_TYPE_HARDWARE, null);   // Verschieben = nur Komposition, kein Neuzeichnen
+        root.addView(spot, new FrameLayout.LayoutParams(dp(SPOT), dp(SPOT)));
 
         scroll = new ScrollView(this);
         scroll.setVerticalScrollBarEnabled(false);
@@ -378,6 +395,16 @@ public class MainActivity extends Activity {
         menuLayer.setVisibility(View.GONE);
         menuLayer.setClickable(true);
         root.addView(menuLayer, new FrameLayout.LayoutParams(-1, -1));
+
+        toastView = tv(15, WHITE, fRegular);
+        toastView.setPadding(dp(22), dp(11), dp(22), dp(11));
+        toastView.setBackground(rounded(0xF20A0A0A, BORDER, 24));
+        toastView.setAlpha(0f);
+        toastView.setVisibility(View.GONE);
+        FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        tl.bottomMargin = dp(48);
+        root.addView(toastView, tl);
+        root.getViewTreeObserver().addOnScrollChangedListener(() -> placeSpot(false));
 
         saver = buildSaver();
         saver.setVisibility(View.GONE);
@@ -443,6 +470,15 @@ public class MainActivity extends Activity {
         nav.addView(clock, lpLeft(10));
 
         TextView settings = button("Einstellungen");
+        settingsBtn = settings;
+        settings.setOnKeyListener((v, k, e) -> {
+            if (k != KeyEvent.KEYCODE_DPAD_DOWN) return false;
+            if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                if (npSection.getVisibility() == View.VISIBLE) npPlay.requestFocus();
+                else if (!backToTile()) focusFirst();
+            }
+            return true;
+        });
         settings.setOnClickListener(v -> openSettingsMenu());
         nav.addView(settings, lpLeft(20));
         return nav;
@@ -604,7 +640,21 @@ public class MainActivity extends Activity {
 
     // ================================================================ Apps laden
 
+    private volatile boolean appsDirty = true;
+
+    private final android.content.BroadcastReceiver packageReceiver = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(Context c, Intent i) {
+            if (i.getData() != null) {      // Farbe dieser App neu berechnen lassen
+                getSharedPreferences("colors", MODE_PRIVATE).edit()
+                        .remove(i.getData().getSchemeSpecificPart()).apply();
+            }
+            appsDirty = true;
+            if (isFront) loadApps();
+        }
+    };
+
     private void loadApps() {
+        appsDirty = false;
         new Thread(() -> {
             PackageManager pm = getPackageManager();
             Map<String, AppInfo> map = new LinkedHashMap<>();
@@ -640,11 +690,34 @@ public class MainActivity extends Activity {
             a.launch = new Intent(Intent.ACTION_MAIN).addCategory(cat)
                     .setClassName(pkg, ri.activityInfo.name)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
-            try { a.banner = ri.activityInfo.loadBanner(pm); } catch (Exception ignored) { }
+            try { a.banner = scaledBanner(ri.activityInfo.loadBanner(pm)); } catch (Exception ignored) { }
             try { a.icon = ri.loadIcon(pm); } catch (Exception ignored) { }
-            a.color = dominantColor(a.banner != null ? a.banner : a.icon);
+            SharedPreferences cp = getSharedPreferences("colors", MODE_PRIVATE);
+            if (cp.contains(pkg)) a.color = cp.getInt(pkg, BLUE);
+            else {
+                a.color = dominantColor(a.banner != null ? a.banner : a.icon);
+                cp.edit().putInt(pkg, a.color).apply();
+            }
             into.put(pkg, a);
         }
+    }
+
+    /** Banner einmal auf Kachelgroesse rechnen, statt es bei jedem Bild aus voller Groesse zu skalieren. */
+    private Drawable scaledBanner(Drawable src) {
+        if (src == null) return null;
+        int w = dp(232), h = dp(131);
+        Drawable d = src.getConstantState() != null ? src.getConstantState().newDrawable().mutate() : src;
+        int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        if (iw > 0 && ih > 0) {                       // wie CENTER_CROP
+            float s = Math.max(w / (float) iw, h / (float) ih);
+            int dw = Math.round(iw * s), dh = Math.round(ih * s);
+            int l = (w - dw) / 2, t = (h - dh) / 2;
+            d.setBounds(l, t, l + dw, t + dh);
+        } else d.setBounds(0, 0, w, h);
+        d.draw(c);
+        return new android.graphics.drawable.BitmapDrawable(getResources(), b);
     }
 
     private boolean isSystemHidden(String pkg) {
@@ -780,13 +853,23 @@ public class MainActivity extends Activity {
             for (String p : vis) line.addView(tile(find(p), r.id, true));
         }
 
+        boolean pcInRow = false;
+        for (Row r : rows) if (r.apps.contains(PC_PKG)) pcInRow = true;
         int n = 0;
         for (AppInfo a : apps) {
             if (hidden.contains(a.pkg)) continue;
+            if (PC_PKG.equals(a.pkg) && pcInRow) continue;     // nicht doppelt anzeigen
             grid.addView(tile(a, ALL, false));
             n++;
         }
         appCount.setText(String.format(Locale.ROOT, "%02d", n));
+
+        firstRowId = ALL;
+        View ft = findFirstTile(rowsBox);
+        if (ft != null) firstRowId = ((String) ft.getTag()).split("\\|")[0];
+        if (firstRender) {
+            if (splash != null) pendingIntro = true; else introRows();
+        }
 
         if (menuLayer.getVisibility() == View.VISIBLE) return;
         View target = focusPkg != null ? root.findViewWithTag(focusRow + "|" + focusPkg)
@@ -820,7 +903,7 @@ public class MainActivity extends Activity {
         t.setFocusable(true);
         t.setClickable(true);
         t.setClipToOutline(true);
-        t.setAlpha(0.8f);
+        t.setAlpha(LITE ? 1f : 0.8f);
 
         final boolean moving = a.pkg.equals(movingPkg) && rowId.equals(movingRow);
         int radius = big ? 12 : 10;
@@ -864,19 +947,24 @@ public class MainActivity extends Activity {
         t.setOnFocusChangeListener((v, has) -> {
             if (!moving) fg.setStroke(has ? dp(2) : dp(1), has ? 0xFFFFFFFF : BORDER);
             v.animate().cancel();
-            v.animate().scaleX(has ? 1.07f : 1f).scaleY(has ? 1.07f : 1f)
-                    .alpha(has ? 1f : 0.8f)
+            v.animate().setStartDelay(0)        // Verzoegerung vom Einblenden nicht uebernehmen
+                    .scaleX(has ? 1.07f : 1f).scaleY(has ? 1.07f : 1f)
+                    .alpha(LITE || has ? 1f : 0.8f)
                     .translationZ(has && !LITE ? dp(24) : 0)   // Schatten kosten auf schwachen Sticks viel
                     .setDuration(LITE ? 140 : 200)
                     .setInterpolator(new DecelerateInterpolator(1.6f))
                     .start();
             if (has) {
+                lastTile = v;
+                spotColor(a.color);
+                ui.removeCallbacks(spotLater);
+                ui.postDelayed(spotLater, LITE ? 180 : 230);   // nach dem automatischen Scrollen
                 setHero(a.label, a.pkg, a.color);
                 wizOnFocusColor(a.color);
                 heroHint.setText(moving ? "  ◀ ▶ verschieben · OK fertig" : "  Optionen");
             }
         });
-        t.setOnClickListener(v -> { if (moving) endMove(); else launch(a); });
+        t.setOnClickListener(v -> { if (moving) endMove(); else launchWithTransition(v, a); });
         t.setOnLongClickListener(v -> { if (!moving) openAppMenu(a, rowId); return true; });
         t.setOnKeyListener((v, keyCode, e) -> {
             if (moving) {
@@ -890,6 +978,14 @@ public class MainActivity extends Activity {
             }
             if (keyCode == KeyEvent.KEYCODE_MENU) {
                 if (e.getAction() == KeyEvent.ACTION_UP) openAppMenu(a, rowId);
+                return true;
+            }
+            // Aus der obersten Reihe nach oben: zur "Jetzt laeuft"-Karte, sonst zu "Einstellungen"
+            if (keyCode == KeyEvent.KEYCODE_DPAD_UP && rowId.equals(firstRowId)) {
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    View up = npSection.getVisibility() == View.VISIBLE ? npPlay : settingsBtn;
+                    if (up != null) up.requestFocus();
+                }
                 return true;
             }
             return false;
@@ -1043,7 +1139,7 @@ public class MainActivity extends Activity {
         head.setPadding(dp(12), dp(10), dp(12), dp(8));
         panel.addView(head);
 
-        View first = null;
+        View first = null, last = null;
         for (MItem mi : items) {
             TextView t = tv(15, mi.danger ? RED : WHITE, fRegular);
             t.setText(mi.label);
@@ -1062,9 +1158,18 @@ public class MainActivity extends Activity {
                 mi.action.run();
                 if (menuLayer.getVisibility() != View.VISIBLE) restoreFocusAfterMenu();
             });
+            t.setId(View.generateViewId());
+            t.setOnKeyListener((v, k, e) ->            // links/rechts verlaesst das Menue nicht
+                    k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT);
             panel.addView(t, new LinearLayout.LayoutParams(-1, -2));
             if (first == null) first = t;
+            last = t;
         }
+        if (first != null) {                            // oben/unten bleibt die Auswahl im Menue
+            first.setNextFocusUpId(first.getId());
+            last.setNextFocusDownId(last.getId());
+        }
+        scroll.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         TextView foot = tv(11, GRAY_2, fMono);
         foot.setText("Zurück = schließen");
         foot.setPadding(dp(12), dp(8), dp(12), dp(6));
@@ -1088,6 +1193,7 @@ public class MainActivity extends Activity {
     }
 
     private void hideMenuQuiet() {
+        scroll.setDescendantFocusability(android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS);
         menuLayer.setVisibility(View.GONE);
         menuLayer.removeAllViews();
     }
@@ -1715,9 +1821,27 @@ public class MainActivity extends Activity {
         li.rightMargin = dp(18);
         card.addView(info, li);
 
+        LinearLayout appRow = new LinearLayout(this);
+        appRow.setGravity(Gravity.CENTER_VERTICAL);
+        info.addView(appRow);
         npApp = tv(10, GRAY_2, fMono);
         npApp.setLetterSpacing(0.12f);
-        info.addView(npApp);
+        appRow.addView(npApp);
+        LinearLayout eq = new LinearLayout(this);
+        eq.setGravity(Gravity.BOTTOM);
+        LinearLayout.LayoutParams eql = new LinearLayout.LayoutParams(-2, dp(12));
+        eql.leftMargin = dp(10);
+        appRow.addView(eq, eql);
+        for (int i = 0; i < 3; i++) {
+            View bar = new View(this);
+            bar.setBackgroundColor(GREEN);
+            bar.setPivotY(dp(12));
+            bar.setScaleY(0.3f);
+            LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(3), dp(12));
+            if (i > 0) bl.leftMargin = dp(2);
+            eq.addView(bar, bl);
+            eqBars[i] = bar;
+        }
         npTitle = tv(22, WHITE, fSemi);
         npTitle.setLetterSpacing(-0.02f);
         npTitle.setSingleLine(true);
@@ -1755,6 +1879,29 @@ public class MainActivity extends Activity {
         return npSection;
     }
 
+    private final View[] eqBars = new View[3];
+    private final android.animation.ObjectAnimator[] eqAnims = new android.animation.ObjectAnimator[3];
+
+    /** E3: kleine Equalizer-Balken, solange Musik laeuft. */
+    private void setEq(boolean on) {
+        long[] dur = {420, 560, 480};
+        for (int i = 0; i < 3; i++) {
+            if (eqBars[i] == null) continue;
+            if (on) {
+                if (eqAnims[i] != null && eqAnims[i].isRunning()) continue;
+                eqAnims[i] = android.animation.ObjectAnimator.ofFloat(eqBars[i], "scaleY", 0.25f, 1f);
+                eqAnims[i].setDuration(dur[i]);
+                eqAnims[i].setRepeatCount(android.animation.ValueAnimator.INFINITE);
+                eqAnims[i].setRepeatMode(android.animation.ValueAnimator.REVERSE);
+                eqAnims[i].setStartDelay(i * 90L);
+                eqAnims[i].start();
+            } else {
+                if (eqAnims[i] != null) eqAnims[i].cancel();
+                eqBars[i].setScaleY(0.3f);
+            }
+        }
+    }
+
     private TextView mediaBtn(String s, Runnable action) {
         TextView t = tv(14, WHITE, fMono);
         t.setText(s);
@@ -1775,6 +1922,11 @@ public class MainActivity extends Activity {
             }
         });
         t.setOnClickListener(v -> action.run());
+        t.setOnKeyListener((v, k, e) -> {
+            if (k != KeyEvent.KEYCODE_DPAD_DOWN) return false;
+            if (e.getAction() == KeyEvent.ACTION_DOWN && !backToTile()) focusFirst();
+            return true;
+        });
         return t;
     }
 
@@ -1845,6 +1997,7 @@ public class MainActivity extends Activity {
         if (md == null) {
             boolean hadFocus = npSection.findFocus() != null;
             npSection.setVisibility(View.GONE);
+            setEq(false);
             ui.removeCallbacks(npTick);
             npKey = null;
             if (hadFocus) focusFirst();
@@ -1880,6 +2033,7 @@ public class MainActivity extends Activity {
         android.media.session.PlaybackState st = c.getPlaybackState();
         boolean playing = st != null && st.getState() == android.media.session.PlaybackState.STATE_PLAYING;
         npPlay.setText(playing ? "❚❚" : "▶");
+        setEq(playing);
 
         if (npSection.getVisibility() != View.VISIBLE) {
             npSection.setAlpha(0f);
@@ -2053,6 +2207,7 @@ public class MainActivity extends Activity {
                     .setInterpolator(new DecelerateInterpolator(1.6f)).start();
             s.animate().alpha(0f).setDuration(fast ? 150 : 350)
                     .withEndAction(() -> root.removeView(s)).start();
+            if (pendingIntro) introRows();
         }, out);
     }
 
@@ -2349,6 +2504,7 @@ public class MainActivity extends Activity {
 
     private void openSystemSettings() {
         lastLaunchedPkg = "system.settings";
+        lastLeftByLaunch = System.currentTimeMillis();
         try {
             startActivity(new Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         } catch (Exception e) {
@@ -2357,8 +2513,170 @@ public class MainActivity extends Activity {
         }
     }
 
+    private TextView toastView;
+    private final Runnable toastHide = () -> toastView.animate().alpha(0f).translationY(dp(10)).setDuration(220)
+            .withEndAction(() -> toastView.setVisibility(View.GONE)).start();
+
+    /** Meldung im CleanHome-Look (dunkle Pille unten) statt Amazon-Toast. */
     private void toast(String s) {
-        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+        ui.removeCallbacks(toastHide);
+        toastView.animate().cancel();
+        toastView.setText(s);
+        toastView.setVisibility(View.VISIBLE);
+        toastView.setAlpha(0f);
+        toastView.setTranslationY(dp(12));
+        toastView.animate().alpha(1f).translationY(0).setDuration(200)
+                .setInterpolator(new DecelerateInterpolator()).start();
+        ui.postDelayed(toastHide, 2400);
+    }
+
+    // ================================================================ Effekte
+
+    private TextView settingsBtn;
+    private View lastTile;
+    private String firstRowId = ALL;
+    private boolean pendingIntro;
+
+    /** Zurueck zur zuletzt markierten Kachel (fuer "runter" von Einstellungen / Jetzt laeuft). */
+    private boolean backToTile() {
+        if (lastTile != null && lastTile.isAttachedToWindow() && lastTile.isShown()) {
+            lastTile.requestFocus();
+            return true;
+        }
+        return false;
+    }
+
+    // E1: Start-Uebergang - die Kachel waechst auf Vollbild, dann startet die App
+    private View launchFx;
+
+    private void launchWithTransition(View tileV, AppInfo a) {
+        if (PC_PKG.equals(a.pkg) || root.getWidth() == 0) { launch(a); return; }
+        clearLaunchFx();
+        int[] loc = new int[2], rl = new int[2];
+        tileV.getLocationInWindow(loc);
+        root.getLocationInWindow(rl);
+        int w = Math.round(tileV.getWidth() * tileV.getScaleX());
+        int h = Math.round(tileV.getHeight() * tileV.getScaleY());
+        float x = loc[0] - rl[0], y = loc[1] - rl[1];
+        ImageView fx = new ImageView(this);
+        fx.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        if (a.banner != null) fx.setImageDrawable(a.banner);
+        fx.setBackground(rounded(a.color, 0, 12));
+        fx.setClipToOutline(true);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h);
+        lp.leftMargin = Math.round(x);
+        lp.topMargin = Math.round(y);
+        root.addView(fx, root.indexOfChild(menuLayer), lp);
+        launchFx = fx;
+        float s = Math.max(root.getWidth() / (float) w, root.getHeight() / (float) h);
+        fx.setPivotX(w / 2f);
+        fx.setPivotY(h / 2f);
+        fx.animate()
+                .translationX(root.getWidth() / 2f - (x + w / 2f))
+                .translationY(root.getHeight() / 2f - (y + h / 2f))
+                .scaleX(s).scaleY(s)
+                .setDuration(LITE ? 220 : 280)
+                .setInterpolator(new AccelerateDecelerateInterpolator())
+                .withEndAction(() -> {
+                    launch(a);
+                    ui.postDelayed(this::clearLaunchFx, 2500);   // Sicherheitsnetz
+                })
+                .start();
+    }
+
+    private void clearLaunchFx() {
+        if (launchFx != null) {
+            root.removeView(launchFx);
+            launchFx = null;
+        }
+    }
+
+    // E4: Reihen beim ersten Laden nacheinander einblenden
+    private void introRows() {
+        pendingIntro = false;
+        long d = 0;
+        for (int i = 0; i < rowsBox.getChildCount(); i++) d = intro(rowsBox.getChildAt(i), d);
+        for (int i = 0; i < grid.getChildCount() && i < 10; i++) d = intro(grid.getChildAt(i), d);
+    }
+
+    private long intro(View v, long delay) {
+        v.setAlpha(0f);
+        if (!LITE) v.setTranslationY(dp(12));
+        v.animate().alpha(v.isFocused() || LITE ? 1f : v.getAlpha() == 0f && v.getTag() != null && !LITE ? 0.8f : 1f)
+                .translationY(0).setStartDelay(delay).setDuration(LITE ? 180 : 320)
+                .setInterpolator(new DecelerateInterpolator()).start();
+        return delay + (LITE ? 25 : 45);
+    }
+
+    // E5: Spotlight hinter der markierten Kachel
+    private static final int SPOT = 460;
+    private View spot;
+    private GradientDrawable spotDrawable;
+    private int spotCol = 0;
+    private final Runnable spotLater = () -> placeSpot(true);
+
+    private void spotColor(int c) {
+        if (c == spotCol) return;
+        spotCol = c;
+        spotDrawable.setColors(new int[]{withAlpha(c, LITE ? 0x40 : 0x55), withAlpha(c, 0)});
+    }
+
+    private void placeSpot(boolean animate) {
+        if (spot == null) return;
+        View f = getCurrentFocus();
+        boolean onTile = f != null && f == lastTile && f.isAttachedToWindow() && f.isShown()
+                && menuLayer.getVisibility() != View.VISIBLE;
+        if (!onTile) {
+            if (spot.getAlpha() > 0f) spot.animate().alpha(0f).setDuration(150).start();
+            return;
+        }
+        int[] loc = new int[2], rl = new int[2];
+        f.getLocationInWindow(loc);
+        root.getLocationInWindow(rl);
+        float cx = loc[0] - rl[0] + f.getWidth() * f.getScaleX() / 2f;
+        float cy = loc[1] - rl[1] + f.getHeight() * f.getScaleY() / 2f;
+        float tx = cx - dp(SPOT) / 2f, ty = cy - dp(SPOT) / 2f;
+        if (animate) {
+            spot.animate().x(tx).y(ty).alpha(1f).setStartDelay(0).setDuration(LITE ? 180 : 260)
+                    .setInterpolator(new DecelerateInterpolator()).start();
+        } else {
+            spot.animate().cancel();
+            spot.setX(tx);
+            spot.setY(ty);
+        }
+    }
+
+    // ================================================================ Statischer Hintergrund (A)
+
+    /** Schwarz + Raster + Abdunklung zu den Raendern, einmal als Bild gerechnet. */
+    static class StaticBackground extends View {
+        private Bitmap cache;
+        StaticBackground(Context c) { super(c); }
+
+        @Override
+        protected void onSizeChanged(int w, int h, int ow, int oh) {
+            if (w <= 0 || h <= 0) return;
+            float d = getResources().getDisplayMetrics().density;
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+            Canvas c = new Canvas(b);
+            c.drawColor(0xFF000000);
+            Paint p = new Paint();
+            p.setColor(0x14FFFFFF);
+            p.setStrokeWidth(Math.max(1f, d * 0.5f));
+            float step = 48 * d, x0 = (w % step) / 2f;
+            for (float x = x0; x <= w; x += step) c.drawLine(x, 0, x, h, p);
+            for (float y = 0; y <= h; y += step) c.drawLine(0, y, w, y, p);
+            Paint f = new Paint();
+            f.setShader(new android.graphics.RadialGradient(w / 2f, 0, 640 * d,
+                    new int[]{0x00000000, 0x99000000, 0xFF000000}, null, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, f);
+            cache = b;
+        }
+
+        @Override
+        protected void onDraw(Canvas c) {
+            if (cache != null) c.drawBitmap(cache, 0, 0, null);
+        }
     }
 
     // ================================================================ Raster-Hintergrund
