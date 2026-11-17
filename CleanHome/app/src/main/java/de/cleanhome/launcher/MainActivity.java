@@ -726,6 +726,7 @@ public class MainActivity extends Activity {
             hs.setClipToPadding(false);
             LinearLayout line = new LinearLayout(this);
             line.setClipChildren(false);
+            line.setClipToPadding(false);   // sonst wird die vergroesserte Kachel am Innenrand abgeschnitten
             // Reihe ragt 32dp in den Rand hinein, damit die vergroesserte Kachel nicht abgeschnitten wird;
             // die Kacheln selbst bleiben genau an der Linie der Ueberschriften.
             line.setPadding(dp(32), dp(12), dp(32), dp(12));
