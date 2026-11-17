@@ -1886,6 +1886,7 @@ public class MainActivity extends Activity {
     // ================================================================ Startanimation (zcrowd)
 
     private FrameLayout splash;
+    private View splashBox, splashHalo;
 
     private void showSplash() {
         splash = new FrameLayout(this);
@@ -1914,6 +1915,8 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
         splash.addView(box, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        splashBox = box;
+        splashHalo = hv;
 
         TextView made = tv(12, GRAY_2, fMono);
         made.setText("made by");
@@ -1922,8 +1925,9 @@ public class MainActivity extends Activity {
         box.addView(made);
 
         LinearLayout word = new LinearLayout(this);
-        word.setPadding(0, dp(10), 0, dp(14));
-        box.addView(word);
+        word.setPadding(dp(8), dp(10), dp(8), dp(14));
+        // WRAP_CONTENT: sonst wird das Wort auf die Breite der Linie (220dp) gekuerzt -> "zcrow"
+        box.addView(word, new LinearLayout.LayoutParams(-2, -2));
         String w = "zcrowd";
         List<TextView> letters = new ArrayList<>();
         for (int i = 0; i < w.length(); i++) {
@@ -1985,16 +1989,31 @@ public class MainActivity extends Activity {
         ui.postDelayed(() -> endSplash(false), 2000);
     }
 
+    /**
+     * Sauberer Uebergang in zwei Schritten (kein gleichzeitiges Ineinanderblenden mehr):
+     *  1. Logo blendet nach oben weg, Hintergrund bleibt schwarz
+     *  2. erst danach erscheint der Home Screen
+     */
     private void endSplash(boolean fast) {
         if (splash == null) return;
         final FrameLayout s = splash;
         splash = null;
-        int d = fast ? 200 : 550;
-        s.animate().alpha(0f).scaleX(1.06f).scaleY(1.06f).setDuration(d)
-                .setInterpolator(new DecelerateInterpolator())
-                .withEndAction(() -> root.removeView(s)).start();
-        scroll.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(d + 150)
-                .setInterpolator(new DecelerateInterpolator(1.5f)).start();
+        int out = fast ? 120 : 380;
+        if (splashBox != null) {
+            splashBox.animate().cancel();
+            splashBox.animate().alpha(0f).translationY(-dp(16)).setDuration(out)
+                    .setInterpolator(new android.view.animation.AccelerateInterpolator()).start();
+        }
+        if (splashHalo != null) splashHalo.animate().alpha(0f).setDuration(out).start();
+        ui.postDelayed(() -> {
+            scroll.setAlpha(0f);
+            scroll.setScaleX(1.03f);
+            scroll.setScaleY(1.03f);
+            scroll.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(fast ? 200 : 500)
+                    .setInterpolator(new DecelerateInterpolator(1.6f)).start();
+            s.animate().alpha(0f).setDuration(fast ? 150 : 350)
+                    .withEndAction(() -> root.removeView(s)).start();
+        }, out);
     }
 
     // ================================================================ Bildschirmschoner (Punkt 1)
