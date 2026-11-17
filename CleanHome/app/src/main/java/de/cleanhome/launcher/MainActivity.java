@@ -179,6 +179,7 @@ public class MainActivity extends Activity {
         loadWiz();
         setContentView(buildUi());
         readPcExtras(getIntent());
+        HomeWatchService.start(this);
         initMedia();
         android.content.IntentFilter sf = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
         sf.addAction(Intent.ACTION_SCREEN_ON);

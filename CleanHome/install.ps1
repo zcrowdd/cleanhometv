@@ -50,7 +50,10 @@ if (-not (Test-Path $apk)) { Write-Host "app-debug.apk fehlt in diesem Ordner." 
 Write-Host "`n[1] Installiere CleanHome ..." -ForegroundColor Cyan
 & $adb -s $T install -r $apk | Out-Host
 
-Write-Host "`n[2] Home-Taste umleiten (Bedienungshilfe) ..." -ForegroundColor Cyan
+Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter + Bedienungshilfe) ..." -ForegroundColor Cyan
+Sh "pm grant $Pkg android.permission.READ_LOGS"
+Sh "am force-stop com.spocky.projengmenu"
+Sh "pm uninstall com.spocky.projengmenu" | Out-Null
 Sh "settings put secure enabled_accessibility_services $Svc"
 Sh "settings put secure accessibility_enabled 1"
 
@@ -68,6 +71,8 @@ if ($AdBlock) {
     Sh "settings put global private_dns_mode hostname"
     Sh "settings put global private_dns_specifier dns.adguard-dns.com"
 }
+
+Sh "am force-stop $Pkg"     # Neustart, damit die Protokoll-Berechtigung greift
 
 if ($PcIp -or $PcMac) {
     Write-Host "`n[5] Gaming-PC eintragen ($PcIp / $PcMac) ..." -ForegroundColor Cyan
