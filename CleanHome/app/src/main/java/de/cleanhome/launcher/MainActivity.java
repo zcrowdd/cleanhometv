@@ -1098,7 +1098,10 @@ public class MainActivity extends Activity {
 
     private void openSettingsMenu() {
         List<MItem> items = new ArrayList<>();
-        items.add(new MItem("Fire-TV-Einstellungen", this::openSystemSettings));
+        // Fire-TV-Bereiche direkt (ohne Amazons Startseite), Zurueck fuehrt wieder zu CleanHome
+        items.add(new MItem("FIRE TV", null));
+        for (String[] fs : FIRE_SETTINGS) items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
+        items.add(new MItem("CLEANHOME", null));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
         items.add(new MItem("Bildschirmschoner jetzt starten", () -> ui.postDelayed(showSaver, 300)));
@@ -1143,6 +1146,14 @@ public class MainActivity extends Activity {
 
         View first = null, last = null;
         for (MItem mi : items) {
+            if (mi.action == null) {                    // Zwischenueberschrift, nicht auswaehlbar
+                TextView h = tv(10, GRAY_2, fMono);
+                h.setText(mi.label);
+                h.setLetterSpacing(0.15f);
+                h.setPadding(dp(12), dp(14), dp(12), dp(6));
+                panel.addView(h);
+                continue;
+            }
             TextView t = tv(15, mi.danger ? RED : WHITE, fRegular);
             t.setText(mi.label);
             t.setPadding(dp(12), dp(11), dp(16), dp(11));
@@ -2501,6 +2512,40 @@ public class MainActivity extends Activity {
             Intent alt = getPackageManager().getLaunchIntentForPackage(a.pkg);
             if (alt != null) startActivity(alt.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             else toast("Kann " + a.label + " nicht öffnen");
+        }
+    }
+
+    /** Direkte Einstiege in Amazons Einstellungs-App (ausgelesen von deinem Stick). */
+    private static final String[][] FIRE_SETTINGS = {
+            {"Netzwerk", "android.settings.WIRELESS_SETTINGS"},
+            {"Bild & Ton", "com.amazon.device.settings.action.DISPLAY_AND_SOUNDS"},
+            {"Apps", "com.amazon.device.settings.action.APPLICATIONS"},
+            {"Fernbedienungen & Bluetooth", "com.amazon.device.settings.action.CONTROLLERS"},
+            {"Präferenzen (Datenschutz, Werbung, Sprache)", "com.amazon.device.settings.action.PREFERENCES"},
+            {"Bedienungshilfen", "com.amazon.device.settings.action.ACCESSIBILITY"},
+            {"Konto & Profil", "com.amazon.device.settings.action.MY_ACCOUNT"},
+            {"Mein Fire TV (Info, Neustart, Entwickler)", "com.amazon.device.settings.action.DEVICE"},
+    };
+    private static final String FIRE_SETTINGS_PKG = "com.amazon.tv.settings.v2";
+
+    /**
+     * Oeffnet eine Fire-TV-Einstellungsseite direkt in Amazons Einstellungs-App.
+     * OHNE NEW_TASK: die Seite liegt dann "auf" CleanHome, und Zurueck aus dem obersten
+     * Menue landet direkt wieder in CleanHome (nicht bei Amazon).
+     */
+    private void openFireSettings(String action) {
+        lastLaunchedPkg = "system.settings";
+        lastLeftByLaunch = System.currentTimeMillis();
+        settingsOpenedAt = System.currentTimeMillis();
+        Intent i = new Intent(action).setPackage(FIRE_SETTINGS_PKG);
+        try {
+            startActivity(i);
+        } catch (Exception e) {
+            try {
+                startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            } catch (Exception e2) {
+                openSystemSettings();      // letzter Ausweg: der alte Weg
+            }
         }
     }
 
