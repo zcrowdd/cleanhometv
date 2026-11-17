@@ -10,11 +10,24 @@ android {
         applicationId 'de.cleanhome.launcher'
         minSdk 22
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        // jede GitHub-Version bekommt eine hoehere Nummer -> sauberes Update
+        versionCode((System.getenv('GITHUB_RUN_NUMBER') ?: '1') as Integer)
+        versionName "1.0.${System.getenv('GITHUB_RUN_NUMBER') ?: '0'}"
+    }
+
+    // Fester Schluessel im Repo: jede gebaute APK hat dieselbe Signatur,
+    // sonst lehnt Android Updates ab ("signatures do not match").
+    signingConfigs {
+        debug {
+            storeFile rootProject.file('debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
     }
 
     buildTypes {
+        debug { signingConfig signingConfigs.debug }
         release { minifyEnabled false }
     }
 

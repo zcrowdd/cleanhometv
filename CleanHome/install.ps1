@@ -48,7 +48,15 @@ $apk = Join-Path $PSScriptRoot "app-debug.apk"
 if (-not (Test-Path $apk)) { Write-Host "app-debug.apk fehlt in diesem Ordner." -ForegroundColor Red; exit 1 }
 
 Write-Host "`n[1] Installiere CleanHome ..." -ForegroundColor Cyan
-& $adb -s $T install -r $apk | Out-Host
+$res = & $adb -s $T install -r $apk 2>&1 | Out-String
+Write-Host $res
+if ($res -match "INSTALL_FAILED_UPDATE_INCOMPATIBLE|signatures do not match") {
+    Write-Host "Alte Version mit anderer Signatur gefunden -> wird einmalig entfernt und neu installiert" -ForegroundColor Yellow
+    & $adb -s $T uninstall $Pkg | Out-Host
+    $res = & $adb -s $T install $apk 2>&1 | Out-String
+    Write-Host $res
+}
+if ($res -notmatch "Success") { Write-Host "Installation fehlgeschlagen - Ausgabe oben an Claude schicken." -ForegroundColor Red; exit 1 }
 
 Write-Host "`n[2] Home-Taste umleiten (Protokoll-Waechter + Bedienungshilfe) ..." -ForegroundColor Cyan
 Sh "pm grant $Pkg android.permission.READ_LOGS"
