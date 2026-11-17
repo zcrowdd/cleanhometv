@@ -80,6 +80,8 @@ public class MainActivity extends Activity {
     static volatile long lastLeftByLaunch;
     /** true, solange CleanHome wirklich vorne ist (fuer das Standbild). */
     static volatile boolean isFront;
+    /** Leistungsmodus fuer schwache Geraete (z. B. Fire TV Stick 3. Gen mit 1 GB RAM). */
+    static boolean LITE;
 
     // ---------------------------------------------------------------- Einstellungen
     private static final String PREFS = "cleanhome";
@@ -179,6 +181,12 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        try {
+            android.app.ActivityManager am = (android.app.ActivityManager) getSystemService(ACTIVITY_SERVICE);
+            android.app.ActivityManager.MemoryInfo mi = new android.app.ActivityManager.MemoryInfo();
+            am.getMemoryInfo(mi);
+            LITE = am.isLowRamDevice() || mi.totalMem < 1600L * 1024 * 1024;
+        } catch (Exception e) { LITE = false; }
         loadFonts();
         loadHidden();
         loadWiz();
@@ -311,7 +319,9 @@ public class MainActivity extends Activity {
     private View buildUi() {
         root = new FrameLayout(this);
         root.setBackgroundColor(BLACK);
-        root.addView(new GridBackground(this), new FrameLayout.LayoutParams(-1, -1));
+        GridBackground grid0 = new GridBackground(this);
+        grid0.setLayerType(View.LAYER_TYPE_HARDWARE, null);   // Raster nur einmal zeichnen, dann aus dem Cache
+        root.addView(grid0, new FrameLayout.LayoutParams(-1, -1));
 
         glow = new GradientDrawable();
         glow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
@@ -568,6 +578,12 @@ public class MainActivity extends Activity {
         }
         heroPkg.setText(sub);
         if (glowAnim != null) glowAnim.cancel();
+        if (LITE) {                                    // kein Farbverlauf ueber 30 Bilder, nur einmal umfaerben
+            ui.removeCallbacks(glowSet);
+            glowTarget = color;
+            ui.postDelayed(glowSet, 120);              // erst wenn man kurz auf einer Kachel bleibt
+            return;
+        }
         final int from = glowColor;
         final ArgbEvaluator ev = new ArgbEvaluator();
         glowAnim = ValueAnimator.ofFloat(0f, 1f);
@@ -578,6 +594,9 @@ public class MainActivity extends Activity {
         });
         glowAnim.start();
     }
+
+    private int glowTarget;
+    private final Runnable glowSet = () -> { glowColor = glowTarget; setGlowColors(glowTarget); };
 
     private void setGlowColors(int c) {
         glow.setColors(new int[]{withAlpha(c, 0x59), withAlpha(c, 0x1A), 0x00000000});
@@ -837,7 +856,7 @@ public class MainActivity extends Activity {
         else fg.setStroke(dp(1), BORDER);
         t.setForeground(fg);
 
-        if (Build.VERSION.SDK_INT >= 28) {
+        if (Build.VERSION.SDK_INT >= 28 && !LITE) {
             t.setOutlineSpotShadowColor(a.color);
             t.setOutlineAmbientShadowColor(a.color);
         }
@@ -847,8 +866,8 @@ public class MainActivity extends Activity {
             v.animate().cancel();
             v.animate().scaleX(has ? 1.07f : 1f).scaleY(has ? 1.07f : 1f)
                     .alpha(has ? 1f : 0.8f)
-                    .translationZ(has ? dp(24) : 0)
-                    .setDuration(200)
+                    .translationZ(has && !LITE ? dp(24) : 0)   // Schatten kosten auf schwachen Sticks viel
+                    .setDuration(LITE ? 140 : 200)
                     .setInterpolator(new DecelerateInterpolator(1.6f))
                     .start();
             if (has) {
