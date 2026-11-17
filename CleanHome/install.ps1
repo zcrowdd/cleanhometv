@@ -37,6 +37,8 @@ if ($Undo) {
     if ($acc -match "cleanhome") { Sh "settings put secure enabled_accessibility_services ''"; Sh "settings put secure accessibility_enabled 0" }
     Sh "settings put global private_dns_mode off"
     Sh "settings put secure screensaver_enabled 1"
+    Sh "settings delete secure screensaver_components"
+    Sh "settings put secure sleep_timeout 1200000"
     Sh "cmd notification disallow_listener de.cleanhome.launcher/de.cleanhome.launcher.MediaListener"
     & $adb -s $T uninstall $Pkg | Out-Host
     Write-Host "Zurueckgesetzt - Amazon-Startseite ist wieder da." -ForegroundColor Green
@@ -76,8 +78,12 @@ if ($acc -match "cleanhome") {
     Write-Host "   alte Bedienungshilfe entfernt"
 }
 
-Write-Host "`n[3] Amazon-Bildschirmschoner aus (CleanHome hat einen eigenen) ..." -ForegroundColor Cyan
-Sh "settings put secure screensaver_enabled 0"
+Write-Host "`n[3] Ruhebildschirm: CleanHome statt Amazon, kein schwarzer Ruhezustand mehr ..." -ForegroundColor Cyan
+Sh "settings put secure screensaver_enabled 1"
+Sh "settings put secure screensaver_components de.cleanhome.launcher/de.cleanhome.launcher.SaverDream"
+Sh "settings put secure screensaver_activate_on_sleep 1"
+Sh "settings put secure screensaver_activate_on_dock 1"
+Sh "settings put secure sleep_timeout 0"
 
 Write-Host "`n[3a] 'Jetzt laeuft'-Karte freigeben (Musik/Video-Infos) ..." -ForegroundColor Cyan
 Sh "cmd notification allow_listener de.cleanhome.launcher/de.cleanhome.launcher.MediaListener"

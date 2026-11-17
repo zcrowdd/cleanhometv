@@ -59,6 +59,43 @@ public class WizLights {
         });
     }
 
+    private int[][] eachCur;
+
+    /** Jede Lampe bekommt ihre eigene Farbe (Lampe i -> colors[i % n]), sanft ueber ~3 s. */
+    public void fadeEach(int[] colors, int dimming) {
+        if (colors == null || colors.length == 0) return;
+        submit(() -> {
+            List<String> copy;
+            synchronized (this) { copy = new ArrayList<>(ips); }
+            int n = copy.size();
+            if (eachCur == null || eachCur.length != n) {
+                eachCur = new int[n][];
+                for (int i = 0; i < n; i++) eachCur[i] = new int[]{curR, curG, curB};
+            }
+            int[][] start = new int[n][];
+            for (int i = 0; i < n; i++) start[i] = eachCur[i].clone();
+            int steps = 12;
+            for (int s = 1; s <= steps; s++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                float f = s / (float) steps;
+                for (int i = 0; i < n; i++) {
+                    int c = colors[i % colors.length];
+                    int r = Math.round(start[i][0] + (Color.red(c) - start[i][0]) * f);
+                    int g = Math.round(start[i][1] + (Color.green(c) - start[i][1]) * f);
+                    int b = Math.round(start[i][2] + (Color.blue(c) - start[i][2]) * f);
+                    eachCur[i] = new int[]{r, g, b};
+                    String j = "{\"method\":\"setPilot\",\"params\":{\"r\":" + r + ",\"g\":" + g
+                            + ",\"b\":" + b + ",\"dimming\":" + Math.max(10, dimming) + "}}";
+                    sendTo(copy.get(i), j);
+                }
+                sleep(250);
+            }
+            int c0 = colors[0];
+            curR = Color.red(c0); curG = Color.green(c0); curB = Color.blue(c0); curDim = dimming;
+            lastJson = null;
+        });
+    }
+
     /** Warmweiss (Kelvin), z. B. fuer Kino-Modus. */
     public void white(int kelvin, int dimming) {
         submit(() -> {

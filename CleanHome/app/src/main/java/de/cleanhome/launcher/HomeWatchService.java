@@ -29,6 +29,10 @@ public class HomeWatchService extends Service {
     private static final String AMAZON_HOME = "com.amazon.tv.launcher";
     private static final String CHANNEL = "homewatch";
     private static volatile boolean running;
+    /** Zuletzt vorne gesehene fremde App (fuer "nach dem Bildschirmschoner dorthin zurueck"). */
+    public static volatile String lastForegroundPkg;
+    private static final java.util.regex.Pattern RESUMED_PKG =
+            java.util.regex.Pattern.compile("[\\[,]\\s*([A-Za-z0-9_.]+)/");
     private Thread worker;
     private volatile long lastLaunch;
     private static final String TAG = "CleanHomeWatch";
@@ -88,6 +92,16 @@ public class HomeWatchService extends Service {
                 BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
                 String line;
                 while (running && (line = r.readLine()) != null) {
+                    if (line.contains("am_set_resumed_activity")) {
+                        java.util.regex.Matcher m = RESUMED_PKG.matcher(line);
+                        if (m.find()) {
+                            String pk = m.group(1);
+                            if (pk.equals(getPackageName())) { /* CleanHome selbst */ }
+                            else if (pk.equals(AMAZON_HOME) || pk.startsWith("com.android.systemui")) lastForegroundPkg = null;
+                            else lastForegroundPkg = pk;
+                            MainActivity.foregroundChanged();
+                        }
+                    }
                     if (!line.contains(AMAZON_HOME)) continue;
                     // Nur die echte Amazon-STARTSEITE zaehlt - andere Bildschirme derselben App
                     // (z. B. Einstellungen, Profile, Suche) duerfen ganz normal offen bleiben.

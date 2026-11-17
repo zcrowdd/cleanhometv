@@ -78,6 +78,9 @@ public class MainActivity extends Activity {
 
     /** Zeitpunkt, an dem CleanHome bewusst eine App gestartet hat (dann kein Standbild zeigen). */
     static volatile long lastLeftByLaunch;
+    static final String EXTRA_SAVER = "cleanhome_saver";
+    static final String EXTRA_RETURN_PKG = "cleanhome_return_pkg";
+    private String saverReturnPkg;      // nach dem Ruhebildschirm in diese App zurueck
     /** Zeitpunkt, an dem die Fire-TV-Einstellungen geoeffnet wurden (Waechter pausiert kurz). */
     static volatile long settingsOpenedAt;
     /** true, solange CleanHome wirklich vorne ist (fuer das Standbild). */
@@ -192,6 +195,8 @@ public class MainActivity extends Activity {
         loadFonts();
         loadHidden();
         loadWiz();
+        loadGovee();
+        inst = new java.lang.ref.WeakReference<>(this);
         setContentView(buildUi());
         readPcExtras(getIntent());
         HomeWatchService.start(this);
@@ -206,7 +211,8 @@ public class MainActivity extends Activity {
         pf.addAction(Intent.ACTION_PACKAGE_REPLACED);
         pf.addDataScheme("package");
         registerReceiver(packageReceiver, pf);
-        if (b == null) showSplash();   // nur beim Kaltstart (z. B. nach dem Einschalten)
+        if (getIntent() != null && getIntent().getBooleanExtra(EXTRA_SAVER, false)) handleSaverIntent(getIntent());
+        else if (b == null) showSplash();   // nur beim Kaltstart (z. B. nach dem Einschalten)
     }
 
     @Override
@@ -218,6 +224,8 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(weatherTick); ui.post(weatherTick);
         ui.removeCallbacks(netTick); ui.post(netTick);
         isFront = true;
+        // Solange CleanHome vorne ist, geht der Stick nie in den schwarzen Ruhezustand
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HomeMask.hide(this, true);        // CleanHome ist vorne -> Standbild ausblenden
         if (msm == null) initMedia();     // z. B. wenn die Berechtigung erst jetzt erteilt wurde
         wizHome();
@@ -240,6 +248,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         isFront = false;
+        getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         super.onPause();
         ui.removeCallbacks(weatherTick);
         ui.removeCallbacks(netTick);
@@ -267,6 +276,19 @@ public class MainActivity extends Activity {
         if (movingPkg != null) endMove();
         if (scroll != null) scroll.smoothScrollTo(0, 0);
         focusFirst();
+        if (intent != null && intent.getBooleanExtra(EXTRA_SAVER, false)) handleSaverIntent(intent);
+    }
+
+    /** Vom System-Bildschirmschoner (SaverDream) gestartet: sofort Ruhebildschirm statt schwarz. */
+    private void handleSaverIntent(Intent i) {
+        String ret = i.getStringExtra(EXTRA_RETURN_PKG);
+        i.removeExtra(EXTRA_SAVER);
+        ui.removeCallbacks(showSaver);
+        ui.postDelayed(() -> {
+            if (splash != null) endSplash(false);
+            showSaver.run();
+            saverReturnPkg = ret;     // erst nach showSaver setzen (showSaver loescht nichts davon)
+        }, 50);
     }
 
     @Override
@@ -294,7 +316,20 @@ public class MainActivity extends Activity {
         }
         // 1) Bildschirmschoner: jede Taste weckt auf, wird aber nicht weitergegeben
         if (saver.getVisibility() == View.VISIBLE) {
-            if (e.getAction() == KeyEvent.ACTION_UP) hideSaver();
+            if (e.getAction() == KeyEvent.ACTION_UP) {
+                String ret = saverReturnPkg;
+                hideSaver();
+                if (ret != null) {           // vorher war man in einer App -> dorthin zurueck
+                    Intent li = getPackageManager().getLaunchIntentForPackage(ret);
+                    if (li == null) li = getPackageManager().getLeanbackLaunchIntentForPackage(ret);
+                    if (li != null) {
+                        lastLaunchedPkg = ret;
+                        HomeWatchService.lastForegroundPkg = ret;
+                        lastLeftByLaunch = System.currentTimeMillis();
+                        try { startActivity(li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); } catch (Exception ignored) { }
+                    }
+                }
+            }
             return true;
         }
         // 2) Menue offen: Zurueck / ☰ schliesst
@@ -1114,6 +1149,7 @@ public class MainActivity extends Activity {
         items.add(new MItem("CLEANHOME", null));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
+        items.add(new MItem("Govee-Licht  ·  " + (goveeOn ? "dimmt bei Streaming" : "aus"), this::openGoveeMenu));
         items.add(new MItem("Bildschirmschoner jetzt starten", () -> ui.postDelayed(showSaver, 300)));
         showMenu("Einstellungen", items);
     }
@@ -1647,7 +1683,7 @@ public class MainActivity extends Activity {
             t = new int[]{1, 2700, 50};                               // TV aus -> normales Raumlicht
         } else if (saver != null && saver.getVisibility() == View.VISIBLE) {
             t = new int[]{1, 2200, 10};                               // Bildschirmschoner -> fast dunkel
-        } else if (pcStarting || (!homeVisible && appKind(lastLaunchedPkg) == K_GAME)) {
+        } else if (pcStarting || (!homeVisible && appKind(fgPkg()) == K_GAME)) {
             t = new int[]{0, C_GAMING, 60};                           // Gaming -> lila
         } else if (homeVisible) {
             android.media.session.MediaController music = null;
@@ -1667,9 +1703,9 @@ public class MainActivity extends Activity {
             if (video != null && videoState == P) t = new int[]{1, 2200, 10};          // Film laeuft -> Kino
             else if (video != null) t = new int[]{1, 2700, 35};                        // Film pausiert -> etwas heller
             else if (music != null && npCtrl == music) t = new int[]{0, npColor, 70};  // Musik in anderer App
-            else if (appKind(lastLaunchedPkg) == K_VIDEO) t = new int[]{1, 2400, 20};  // Streaming-App, Menue
+            else if (appKind(fgPkg()) == K_VIDEO) t = new int[]{1, 2400, 20};  // Streaming-App, Menue
             else {
-                AppInfo a = find(lastLaunchedPkg);
+                AppInfo a = find(fgPkg());
                 t = new int[]{0, a != null ? a.color : lastAppColor, 60};              // andere App
             }
         }
@@ -1687,8 +1723,23 @@ public class MainActivity extends Activity {
         ui.postDelayed(applyLights, delayMs);
     }
 
+    /** App, die gerade wirklich vorne ist (vom Waechter gemeldet, sonst die zuletzt gestartete). */
+    private String fgPkg() {
+        String f = HomeWatchService.lastForegroundPkg;
+        return f != null ? f : lastLaunchedPkg;
+    }
+
+    private static java.lang.ref.WeakReference<MainActivity> inst;
+    /** Vom Waechter: eine andere App ist nach vorne gekommen -> Licht neu berechnen. */
+    static void foregroundChanged() {
+        MainActivity a = inst != null ? inst.get() : null;
+        if (a != null) a.ui.post(() -> a.scheduleLights(300));
+    }
+
     private void applyLightsNow() {
+        applyGovee();
         if (!wizOn || !wiz.hasLamps()) return;
+        if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) { sendSaverLights(); return; }
         int[] t = lightTarget();
         String key;
         if (t[0] == 1) key = "w" + t[1] + ":" + t[2];
@@ -1717,6 +1768,101 @@ public class MainActivity extends Activity {
             scheduleLights(screenOn ? 300 : 0);
         }
     };
+
+    // ================================================================ Govee (nur Helligkeit, nie Farbe)
+
+    private final GoveeLights govee = new GoveeLights();
+    private boolean goveeOn;
+    private final List<String> goveeIps = new ArrayList<>();
+    private final java.util.Map<String, String> goveeFound = new java.util.LinkedHashMap<>();
+    private int goveeNormal = 100, goveeDim = 15;
+
+    private void loadGovee() {
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        goveeOn = p.getBoolean("govee_on", false);
+        goveeNormal = p.getInt("govee_normal", 100);
+        goveeDim = p.getInt("govee_dim", 15);
+        goveeIps.clear();
+        for (String x : p.getString("govee_ips", "").split(",")) if (!x.isEmpty()) goveeIps.add(x);
+        govee.setLamps(goveeIps);
+    }
+
+    private void saveGovee() {
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("govee_on", goveeOn)
+                .putInt("govee_normal", goveeNormal).putInt("govee_dim", goveeDim)
+                .putString("govee_ips", TextUtils.join(",", goveeIps)).apply();
+        govee.setLamps(goveeIps);
+    }
+
+    /** Streaming-App vorne -> gedimmt, sonst normale Helligkeit. Farbe bleibt immer wie in der Govee-App. */
+    private void applyGovee() {
+        if (!goveeOn || !govee.hasLamps()) return;
+        boolean streaming = screenOn && !homeVisible
+                && (saver == null || saver.getVisibility() != View.VISIBLE)
+                && appKind(fgPkg()) == K_VIDEO;
+        govee.brightness(streaming ? goveeDim : goveeNormal);
+    }
+
+    private void openGoveeMenu() {
+        List<MItem> items = new ArrayList<>();
+        items.add(new MItem((goveeOn ? "●  " : "○  ") + "An   — bei Streaming-Apps dimmen", () -> {
+            if (goveeIps.isEmpty()) { toast("Erst Govee-Lichter suchen und auswählen"); ui.postDelayed(this::openGoveeMenu, 300); return; }
+            goveeOn = true; saveGovee(); govee.forget(); scheduleLights(0);
+            toast("Govee: dimmt bei Streaming");
+            ui.postDelayed(this::openGoveeMenu, 200);
+        }));
+        items.add(new MItem((!goveeOn ? "●  " : "○  ") + "Aus   — CleanHome lässt Govee in Ruhe", () -> {
+            if (goveeOn) govee.brightness(goveeNormal);
+            goveeOn = false; saveGovee();
+            toast("Govee: aus");
+            ui.postDelayed(this::openGoveeMenu, 200);
+        }));
+        items.add(new MItem("Helligkeit normal  ·  " + goveeNormal + " %", () -> {
+            int[] v = {100, 80, 60, 40};
+            int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeNormal) k = (x + 1) % v.length;
+            goveeNormal = v[k]; saveGovee(); govee.forget(); scheduleLights(0);
+            ui.postDelayed(this::openGoveeMenu, 150);
+        }));
+        items.add(new MItem("Helligkeit bei Streaming  ·  " + goveeDim + " %", () -> {
+            int[] v = {5, 10, 15, 25, 40};
+            int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeDim) k = (x + 1) % v.length;
+            goveeDim = v[k]; saveGovee(); govee.forget(); scheduleLights(0);
+            ui.postDelayed(this::openGoveeMenu, 150);
+        }));
+        items.add(new MItem("⌕  Govee-Lichter im WLAN suchen", this::searchGovee));
+        List<String> all = new ArrayList<>(goveeIps);
+        for (String f : goveeFound.keySet()) if (!all.contains(f)) all.add(f);
+        for (String ip : all) {
+            boolean on = goveeIps.contains(ip);
+            String model = goveeFound.containsKey(ip) ? goveeFound.get(ip) + "  " : "";
+            items.add(new MItem((on ? "☑  " : "☐  ") + model + ip, () -> {
+                if (goveeIps.contains(ip)) goveeIps.remove(ip); else { goveeIps.add(ip); govee.blink(ip); }
+                saveGovee();
+                ui.postDelayed(this::openGoveeMenu, 200);
+            }));
+        }
+        showMenu("Govee · " + (goveeOn ? "an" : "aus") + " · " + goveeIps.size() + " Gerät(e)", items);
+    }
+
+    private void searchGovee() {
+        toast("Suche Govee-Lichter …");
+        GoveeLights.discover(this, found -> ui.post(() -> {
+            goveeFound.clear();
+            goveeFound.putAll(found);
+            if (found.isEmpty()) toast("Nichts gefunden – in der Govee-App pro Licht „LAN-Steuerung“ einschalten");
+            else {
+                toast(found.size() + " Govee-Licht(er) gefunden");
+                if (goveeIps.isEmpty()) {
+                    goveeIps.addAll(found.keySet());
+                    goveeOn = true;
+                    saveGovee();
+                    for (String ip : found.keySet()) govee.blink(ip);
+                    scheduleLights(2500);
+                }
+            }
+            openGoveeMenu();
+        }));
+    }
 
     private void openWizMenu() {
         List<MItem> items = new ArrayList<>();
@@ -1757,7 +1903,7 @@ public class MainActivity extends Activity {
                 "Film pausiert  → warm, 35 %",
                 "Streaming-App im Menü  → warm, 20 %",
                 "PC-Gaming / Moonlight  → lila",
-                "Bildschirmschoner  → warm, 10 %",
+                "Ruhebildschirm  → Farben der Bildschirm-Ecken",
                 "Fernseher aus  → normales Licht, 50 %",
                 "23–6 Uhr  → höchstens 35 %"
         };
@@ -2247,6 +2393,8 @@ public class MainActivity extends Activity {
         saverContent.setTranslationY(0);
         ui.removeCallbacks(this.driftTick);
         ui.postDelayed(this.driftTick, SAVER_DRIFT_MS);
+        ui.removeCallbacks(this.cornerTick);
+        ui.post(this.cornerTick);
     };
 
     private final Runnable driftTick = new Runnable() {
@@ -2268,11 +2416,66 @@ public class MainActivity extends Activity {
     }
 
     private void hideSaver() {
+        saverReturnPkg = null;
         if (saver == null || saver.getVisibility() != View.VISIBLE) return;
         ui.removeCallbacks(driftTick);
+        ui.removeCallbacks(cornerTick);
         saver.animate().alpha(0f).setDuration(250).withEndAction(() -> saver.setVisibility(View.GONE)).start();
         wizSaver(false);
         resetIdle();
+    }
+
+    // ---- Ecken-Farben des Ruhebildschirms (+ WiZ-Lampen folgen den Ecken)
+    private static final int[] PALETTE = {0xFF0A72EF, 0xFF7928CA, 0xFFFF0080, 0xFFF5A623, 0xFF50E3C2, 0xFF00B3FF};
+    private static final int[] CORNER_OFS = {0, 2, 4, 1};     // jede Ecke startet mit einer anderen Farbe
+    private static final long CORNER_STEP_MS = 10000;          // alle 10 s naechste Farbe
+    private final View[][] cornerViews = new View[4][2];
+    private final FrameLayout[] cornerHolders = new FrameLayout[4];
+    private final int[] cornerFront = new int[4];
+    private final int[] cornerCols = new int[4];
+    private int cornerStep;
+
+    private GradientDrawable cornerDrawable(int color, int size) {
+        GradientDrawable g = new GradientDrawable();
+        g.setGradientType(GradientDrawable.RADIAL_GRADIENT);
+        g.setGradientRadius(size / 2f);
+        int rgb = color & 0x00FFFFFF;
+        g.setColors(new int[]{0x99000000 | rgb, 0x40000000 | rgb, 0x00000000 | rgb});
+        return g;
+    }
+
+    private final Runnable cornerTick = new Runnable() {
+        @Override public void run() {
+            if (saver == null || saver.getVisibility() != View.VISIBLE) return;
+            cornerStep++;
+            int size = cornerHolders[0] != null ? cornerHolders[0].getLayoutParams().width : dp(700);
+            for (int c = 0; c < 4; c++) {
+                int col = PALETTE[(CORNER_OFS[c] + cornerStep) % PALETTE.length];
+                cornerCols[c] = col;
+                int back = 1 - cornerFront[c];
+                View nb = cornerViews[c][back], of = cornerViews[c][cornerFront[c]];
+                nb.setBackground(cornerDrawable(col, size));
+                nb.animate().alpha(1f).setDuration(6000).start();
+                of.animate().alpha(0f).setDuration(6000).start();
+                cornerFront[c] = back;
+                float dx = (rnd.nextFloat() * 2 - 1) * dp(70), dy = (rnd.nextFloat() * 2 - 1) * dp(50);
+                cornerHolders[c].animate().translationX(dx).translationY(dy)
+                        .setDuration(CORNER_STEP_MS).setInterpolator(new AccelerateDecelerateInterpolator()).start();
+            }
+            sendSaverLights();
+            ui.postDelayed(this, CORNER_STEP_MS);
+        }
+    };
+
+    /** Die Lampen uebernehmen die Ecken-Farben (Lampe 1 = oben links, 2 = oben rechts, ...). */
+    private void sendSaverLights() {
+        if (!wizOn || !wiz.hasLamps()) return;
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        int dim = (h >= 23 || h < 6) ? 25 : 45;
+        lightKey = "saver" + cornerStep;           // beim Verlassen wird sicher neu gesendet
+        lightSentAt = android.os.SystemClock.uptimeMillis();
+        ui.removeCallbacks(resendLights);
+        wiz.fadeEach(cornerCols.clone(), dim);
     }
 
     private FrameLayout buildSaver() {
@@ -2288,6 +2491,28 @@ public class MainActivity extends Activity {
         fv.setBackground(fade);
         s.addView(fv, new FrameLayout.LayoutParams(-1, -1));
 
+        // Farbflaechen in den vier Ecken, die langsam die Farbe wechseln und leicht wandern
+        int[] grav = {Gravity.TOP | Gravity.START, Gravity.TOP | Gravity.END,
+                Gravity.BOTTOM | Gravity.END, Gravity.BOTTOM | Gravity.START};
+        int size = dp(LITE ? 620 : 760), off = -size * 4 / 10;
+        for (int c = 0; c < 4; c++) {
+            FrameLayout holder = new FrameLayout(this);
+            for (int k = 0; k < 2; k++) {
+                View b = new View(this) { @Override public boolean hasOverlappingRendering() { return false; } };
+                b.setBackground(cornerDrawable(PALETTE[CORNER_OFS[c] % PALETTE.length], size));
+                b.setAlpha(k == 0 ? 1f : 0f);
+                holder.addView(b, new FrameLayout.LayoutParams(-1, -1));
+                cornerViews[c][k] = b;
+            }
+            FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(size, size, grav[c]);
+            if (c == 0 || c == 3) hl.leftMargin = off; else hl.rightMargin = off;
+            if (c < 2) hl.topMargin = off; else hl.bottomMargin = off;
+            holder.setAlpha(0.75f);
+            s.addView(holder, hl);
+            cornerHolders[c] = holder;
+            cornerCols[c] = PALETTE[CORNER_OFS[c] % PALETTE.length];
+        }
+
         saverContent = new LinearLayout(this);
         saverContent.setOrientation(LinearLayout.VERTICAL);
         saverContent.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -2297,9 +2522,14 @@ public class MainActivity extends Activity {
         big.setFormat12Hour("HH:mm");
         big.setTextSize(TypedValue.COMPLEX_UNIT_SP, 132);
         big.setTypeface(fLight);
-        big.setLetterSpacing(-0.04f);
+        big.setLetterSpacing(-0.02f);
         big.setIncludeFontPadding(false);
         big.setTextColor(WHITE);
+        big.setMaxLines(1);
+        big.setGravity(Gravity.CENTER);
+        // feste Mindestbreite fuer die breiteste Uhrzeit -> die letzte Ziffer wird nie abgeschnitten
+        big.setPadding(dp(12), 0, dp(12), 0);
+        big.setMinWidth(Math.round(big.getPaint().measureText("00:00") * 1.12f) + dp(24));
         big.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) ->
                 big.getPaint().setShader(new LinearGradient(0, 0, 0, big.getHeight(),
                         0xFFFFFFFF, 0xFF7A7A7A, Shader.TileMode.CLAMP)));
@@ -2514,6 +2744,7 @@ public class MainActivity extends Activity {
     private void launch(AppInfo a) {
         if (PC_PKG.equals(a.pkg)) { startPcGaming(); return; }
         lastLaunchedPkg = a.pkg;
+        HomeWatchService.lastForegroundPkg = a.pkg;
         lastLeftByLaunch = System.currentTimeMillis();
         wizLaunch();
         if (autoRam()) freeRam(a.pkg, true);
