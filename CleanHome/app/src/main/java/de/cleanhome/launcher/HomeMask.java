@@ -42,7 +42,79 @@ public final class HomeMask {
         }
     };
 
+    private static View fill;
+    private static android.animation.ValueAnimator progressAnim;
+
     private HomeMask() { }
+
+    private static int dp(Context c, float v) {
+        return Math.round(v * c.getResources().getDisplayMetrics().density);
+    }
+
+    private static android.graphics.Typeface font(Context c, String f, android.graphics.Typeface fb) {
+        try { return android.graphics.Typeface.createFromAsset(c.getAssets(), "fonts/" + f); }
+        catch (Exception e) { return fb; }
+    }
+
+    /**
+     * Ladebildschirm im CleanHome-Look: schwarz, "zcrowd", duenner Ladebalken.
+     * Der Balken laeuft in ~5 s (so lange haelt Android hoechstens zurueck) bis 90 %
+     * und springt auf 100 %, sobald CleanHome wirklich vorne ist.
+     */
+    private static FrameLayout buildLoader(Context c) {
+        FrameLayout v = new FrameLayout(c);
+        v.setBackgroundColor(0xFF000000);
+
+        android.widget.LinearLayout box = new android.widget.LinearLayout(c);
+        box.setOrientation(android.widget.LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER_HORIZONTAL);
+
+        TextView word = new TextView(c);
+        word.setText("zcrowd");
+        word.setTextColor(0xFFEDEDED);
+        word.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 44);
+        word.setTypeface(font(c, "Inter-Bold.otf", android.graphics.Typeface.DEFAULT_BOLD));
+        word.setLetterSpacing(-0.03f);
+        word.setIncludeFontPadding(false);
+        box.addView(word, new android.widget.LinearLayout.LayoutParams(-2, -2));
+
+        FrameLayout track = new FrameLayout(c);
+        android.graphics.drawable.GradientDrawable tb = new android.graphics.drawable.GradientDrawable();
+        tb.setColor(0xFF262626);
+        tb.setCornerRadius(dp(c, 2));
+        track.setBackground(tb);
+        track.setClipToOutline(true);
+        android.widget.LinearLayout.LayoutParams tl = new android.widget.LinearLayout.LayoutParams(dp(c, 220), dp(c, 3));
+        tl.topMargin = dp(c, 22);
+        box.addView(track, tl);
+
+        View f = new View(c);
+        f.setBackgroundColor(0xFFEDEDED);
+        f.setPivotX(0);
+        f.setScaleX(0.04f);
+        track.addView(f, new FrameLayout.LayoutParams(-1, -1));
+        fill = f;
+
+        TextView sub = new TextView(c);
+        sub.setText("home wird geladen");
+        sub.setTextColor(0xFF666666);
+        sub.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12);
+        sub.setTypeface(font(c, "DejaVuSansMono.ttf", android.graphics.Typeface.MONOSPACE));
+        sub.setLetterSpacing(0.15f);
+        android.widget.LinearLayout.LayoutParams sl = new android.widget.LinearLayout.LayoutParams(-2, -2);
+        sl.topMargin = dp(c, 14);
+        box.addView(sub, sl);
+
+        v.addView(box, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+
+        if (progressAnim != null) progressAnim.cancel();
+        progressAnim = android.animation.ValueAnimator.ofFloat(0.04f, 0.9f);
+        progressAnim.setDuration(5000);
+        progressAnim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.4f));
+        progressAnim.addUpdateListener(a -> { if (fill == f) f.setScaleX((float) a.getAnimatedValue()); });
+        progressAnim.start();
+        return v;
+    }
 
     public static boolean allowed(Context c) {
         return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(c);
@@ -55,22 +127,7 @@ public final class HomeMask {
             if (mask != null || !allowed(c)) return;
             try {
                 WindowManager wm = (WindowManager) c.getSystemService(Context.WINDOW_SERVICE);
-                FrameLayout v = new FrameLayout(c);
-                v.setBackgroundColor(0xFF000000);
-                Bitmap b = snapshot;
-                if (b != null && !b.isRecycled()) {
-                    ImageView iv = new ImageView(c);
-                    iv.setScaleType(ImageView.ScaleType.FIT_XY);
-                    iv.setImageBitmap(b);
-                    v.addView(iv, new FrameLayout.LayoutParams(-1, -1));
-                } else {
-                    TextView t = new TextView(c);       // noch kein Standbild (z. B. nach dem Einschalten)
-                    t.setText("zcrowd");
-                    t.setTextColor(0xFFEDEDED);
-                    t.setTextSize(48);
-                    t.setGravity(Gravity.CENTER);
-                    v.addView(t, new FrameLayout.LayoutParams(-1, -1));
-                }
+                FrameLayout v = buildLoader(c);
                 // Tasten waehrend der kurzen Ueberbrueckung abfangen, damit nichts in Amazons Menue landet
                 v.setFocusable(true);
                 v.setFocusableInTouchMode(true);
@@ -113,8 +170,15 @@ public final class HomeMask {
                     wm.removeViewImmediate(v);
                 } catch (Exception ignored) { }
             };
-            if (smooth) v.animate().alpha(0f).setDuration(120).withEndAction(remove).start();
-            else remove.run();
+            if (progressAnim != null) progressAnim.cancel();
+            if (smooth && fill != null) {
+                // Balken sauber auf 100 % fahren, dann ausblenden
+                fill.animate().scaleX(1f).setDuration(160).withEndAction(() ->
+                        v.animate().alpha(0f).setDuration(180).withEndAction(remove).start()).start();
+            } else {
+                remove.run();
+            }
+            fill = null;
         });
     }
 }

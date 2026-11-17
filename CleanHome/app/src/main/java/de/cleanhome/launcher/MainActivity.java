@@ -222,7 +222,6 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         isFront = false;
-        takeSnapshot();
         super.onPause();
         ui.removeCallbacks(weatherTick);
         ui.removeCallbacks(netTick);
