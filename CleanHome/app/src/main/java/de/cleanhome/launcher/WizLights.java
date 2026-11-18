@@ -140,6 +140,29 @@ public class WizLights {
         submit(() -> send("{\"method\":\"setPilot\",\"params\":" + params + "}"));
     }
 
+    /**
+     * Start-Show: Lampen gehen dunkel an, fahren in {@code rampMs} in der Farbe {@code color} hoch
+     * (wie der Ladebalken) und leuchten dann einmal hell weiss auf. Danach wird {@code done} aufgerufen.
+     */
+    public void startShow(int color, long rampMs, Runnable done) {
+        final int r = Color.red(color), g = Color.green(color), b = Color.blue(color);
+        submit(() -> {
+            send("{\"method\":\"setPilot\",\"params\":{\"state\":true,\"r\":" + r + ",\"g\":" + g + ",\"b\":" + b + ",\"dimming\":10}}");
+            int steps = Math.max(4, (int) (rampMs / 110));
+            for (int i = 1; i <= steps; i++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                sleep(rampMs / steps);
+                int dim = 10 + Math.round(60f * i / steps);
+                send("{\"method\":\"setPilot\",\"params\":{\"r\":" + r + ",\"g\":" + g + ",\"b\":" + b + ",\"dimming\":" + dim + "}}");
+            }
+            if (Thread.currentThread().isInterrupted()) return;
+            send("{\"method\":\"setPilot\",\"params\":{\"state\":true,\"temp\":6500,\"dimming\":100}}");   // Aufleuchten
+            sleep(380);
+            curR = 255; curG = 255; curB = 255; curDim = 100;
+            if (done != null) done.run();
+        });
+    }
+
     /** Laufende Ueberblendung sofort abbrechen (z. B. wenn die Sync-Box uebernimmt). */
     public synchronized void cancel() {
         if (running != null) running.cancel(true);

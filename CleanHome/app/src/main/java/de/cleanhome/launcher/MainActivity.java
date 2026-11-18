@@ -241,6 +241,7 @@ public class MainActivity extends Activity {
         if (msm == null) initMedia();     // z. B. wenn die Berechtigung erst jetzt erteilt wurde
         wizHome();
         resetIdle();
+        if (android.os.SystemClock.uptimeMillis() < showOnWakeUntil) playWakeShow();
         for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isPaused()) a.resume();
     }
 
@@ -1834,6 +1835,7 @@ public class MainActivity extends Activity {
     private boolean wizCapturing;
 
     private void applyLightsNow() {
+        if (showRunning) return;                                  // Start-Show laeuft gerade
         if (lightManual != null) {
             if (lightManual.equals(lightManualSent)) return;
             lightManualSent = lightManual;
@@ -1901,8 +1903,14 @@ public class MainActivity extends Activity {
 
     private final android.content.BroadcastReceiver screenReceiver = new android.content.BroadcastReceiver() {
         @Override public void onReceive(Context c, Intent i) {
+            boolean wasOff = !screenOn;
             screenOn = !Intent.ACTION_SCREEN_OFF.equals(i.getAction());
             lightKey = null;
+            if (screenOn && wasOff) {
+                // Fernseher wurde eingeschaltet: zcrowd-Animation + Licht-Show (sobald CleanHome vorne ist)
+                showOnWakeUntil = android.os.SystemClock.uptimeMillis() + 3000;
+                if (isFront) { playWakeShow(); return; }
+            }
             scheduleLights(screenOn ? 300 : 0);
         }
     };
@@ -2641,10 +2649,44 @@ public class MainActivity extends Activity {
         ui.postDelayed(() -> endSplash(false), 7000);   // Sicherheitsnetz, falls nie gezeichnet wird
     }
 
+    // ---- Start-Show: Lichter laufen synchron zur zcrowd-Animation
+    private boolean showRunning;
+
+    private long showOnWakeUntil;
+
+    private void playWakeShow() {
+        showOnWakeUntil = 0;
+        if (splash != null) return;
+        hideSaver();
+        hideMenu();
+        ui.postDelayed(() -> { if (splash == null && isFront) showSplash(); }, 150);
+    }
+
+    private void startLightShow() {
+        boolean w = wizOn && wiz.hasLamps() && lightManual == null;
+        boolean g = goveeOn && govee.hasLamps();
+        if (!w && !g) return;
+        showRunning = true;
+        ui.removeCallbacks(applyLights);
+        ui.removeCallbacks(resendLights);
+        if (g) govee.brightness(1);                              // Govee: erst ganz dunkel ...
+        Runnable finish = () -> ui.post(() -> {
+            if (g) { govee.forget(); govee.brightness(goveeNormal); }   // ... und mit dem Logo hell
+            showRunning = false;
+            lightKey = null;
+            scheduleLights(150);                                  // sanft in den normalen Zustand
+        });
+        // Linie unter dem Logo waechst von 650 bis 1200 ms -> Licht faehrt in 1,1 s hoch, dann Aufleuchten
+        if (w) wiz.startShow(BLUE, 1100, finish);
+        else ui.postDelayed(finish, 1150);
+        ui.postDelayed(() -> { if (showRunning) finish.run(); }, 4000);   // Sicherheitsnetz
+    }
+
     private void playSplash(View[] parts, List<TextView> letters) {
         if (splash == null) return;
         View hv = parts[0], made = parts[1], line = parts[2], sub = parts[3];
         DecelerateInterpolator dec = new DecelerateInterpolator(2f);
+        startLightShow();
         hv.animate().alpha(1f).setDuration(900).start();
         made.animate().alpha(1f).setStartDelay(100).setDuration(400).start();
         for (int i = 0; i < letters.size(); i++) {
