@@ -140,6 +140,12 @@ public class WizLights {
         submit(() -> send("{\"method\":\"setPilot\",\"params\":" + params + "}"));
     }
 
+    /** Laufende Ueberblendung sofort abbrechen (z. B. wenn die Sync-Box uebernimmt). */
+    public synchronized void cancel() {
+        if (running != null) running.cancel(true);
+        lastJson = null;
+    }
+
     /** Lampen ausschalten. */
     public void off() {
         submit(() -> send("{\"method\":\"setPilot\",\"params\":{\"state\":false}}"));

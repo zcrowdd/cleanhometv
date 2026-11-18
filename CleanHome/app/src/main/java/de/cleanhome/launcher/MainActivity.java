@@ -1844,20 +1844,17 @@ public class MainActivity extends Activity {
         }
         applyGovee();
         if (!wizOn || !wiz.hasLamps() || wizCapturing) return;
-        if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) {
-            if (EXT.equals(lightKey)) { captureExternalThen(this::sendSaverLights); return; }
-            sendSaverLights(); return;
-        }
+        if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) { sendSaverLights(); return; }
         int[] t = lightTarget();
-        if (t == null) {                                           // Streaming: Haende weg
+        if (t == null) {
+            // Streaming/Video: die Sync-Box steuert die Lampen. CleanHome schickt KEINEN Befehl -
+            // auch laufende Ueberblendungen und Wiederholungen werden sofort gestoppt.
             if (EXT.equals(lightKey)) return;
             lightKey = EXT;
             ui.removeCallbacks(resendLights);
-            if (wizExternal == null) wizExternal = getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_external", null);
-            wiz.restore(wizExternal);                              // eigenen Modus wiederherstellen (falls bekannt)
+            wiz.cancel();
             return;
         }
-        if (EXT.equals(lightKey)) { captureExternalThen(() -> { lightKey = null; applyLightsNow(); }); return; }
         String key;
         if (t[0] == 1) key = "w" + t[1] + ":" + t[2];
         else key = "c" + (Color.red(t[1]) >> 3) + "," + (Color.green(t[1]) >> 3) + "," + (Color.blue(t[1]) >> 3) + ":" + t[2];
@@ -2187,7 +2184,7 @@ public class MainActivity extends Activity {
         String[] rules = {
                 "Home Screen  → Farbe der markierten App",
                 "Musik läuft  → Farbe des Covers",
-                "Streaming & Videos  → Lampen laufen in ihrem eigenen Modus (wie vor CleanHome)",
+                "Streaming & Videos  → Sync-Box steuert, CleanHome schickt nichts",
                 "Andere Apps  → Markenfarbe",
                 "PC-Gaming / Moonlight  → lila",
                 "Ruhebildschirm  → Farben der Bildschirm-Ecken",
