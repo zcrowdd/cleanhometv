@@ -1724,10 +1724,10 @@ public class MainActivity extends Activity {
             String fg = fgPkg();
             int brand = brandColor(fg);
             boolean justLaunched = android.os.SystemClock.uptimeMillis() - launchFlashAt < 2500;
-            if (video != null && videoState == P) t = new int[]{0, brand, 12};         // Film laeuft -> Markenfarbe, ganz dunkel
-            else if (video != null) t = new int[]{0, brand, 30};                       // Film pausiert -> etwas heller
-            else if (music != null && npCtrl == music && appKind(fg) != K_AUDIO) t = new int[]{0, npColor, 70};  // Musik aus anderer App
-            else if (appKind(fg) == K_VIDEO) t = new int[]{0, brand, 40};              // Streaming-App, Menue
+            // Streaming-Dienste und Videos: CleanHome laesst die Lampen in Ruhe - sie laufen in dem Modus,
+            // den sie vor CleanHome hatten (z. B. eigener Sync-/Szenen-Modus aus der WiZ-App).
+            if (video != null || appKind(fg) == K_VIDEO) return null;
+            if (music != null && npCtrl == music && appKind(fg) != K_AUDIO) t = new int[]{0, npColor, 70};  // Musik aus anderer App
             else t = new int[]{0, brand, 60};                                          // andere App
             if (justLaunched) t[2] = 85;                                               // beim Start kurz kraeftig
         }
@@ -1784,6 +1784,23 @@ public class MainActivity extends Activity {
         return a != null ? a.color : lastAppColor;
     }
 
+    /** Bevor CleanHome nach dem Streaming wieder steuert: den Modus der Lampe merken (Szene, Weiss, Farbe). */
+    private void captureExternalThen(Runnable next) {
+        wizCapturing = true;
+        new Thread(() -> {
+            String st = wiz.capture();
+            ui.post(() -> {
+                wizCapturing = false;
+                if (st != null) {
+                    wizExternal = st;
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("wiz_external", st).apply();
+                }
+                lightKey = "captured";
+                next.run();
+            });
+        }, "wizCapture").start();
+    }
+
     /** App, die gerade wirklich vorne ist (vom Waechter gemeldet, sonst die zuletzt gestartete). */
     private String fgPkg() {
         String f = HomeWatchService.lastForegroundPkg;
@@ -1799,6 +1816,12 @@ public class MainActivity extends Activity {
 
     private String lightManual;   // vom Handy gesetzt: "bright" / "dim" / "off", null = Automatik
     private String lightManualSent;
+
+    // Zustand der Lampen, den sie beim Streaming haben sollen ("ihr eigener Modus"). Wird jedes Mal gemerkt,
+    // wenn man Streaming verlaesst, und beim naechsten Streaming wiederhergestellt.
+    private static final String EXT = "external";
+    private String wizExternal;
+    private boolean wizCapturing;
 
     private void applyLightsNow() {
         if (lightManual != null) {
@@ -1820,9 +1843,21 @@ public class MainActivity extends Activity {
             govee.forget();
         }
         applyGovee();
-        if (!wizOn || !wiz.hasLamps()) return;
-        if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) { sendSaverLights(); return; }
+        if (!wizOn || !wiz.hasLamps() || wizCapturing) return;
+        if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) {
+            if (EXT.equals(lightKey)) { captureExternalThen(this::sendSaverLights); return; }
+            sendSaverLights(); return;
+        }
         int[] t = lightTarget();
+        if (t == null) {                                           // Streaming: Haende weg
+            if (EXT.equals(lightKey)) return;
+            lightKey = EXT;
+            ui.removeCallbacks(resendLights);
+            if (wizExternal == null) wizExternal = getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_external", null);
+            wiz.restore(wizExternal);                              // eigenen Modus wiederherstellen (falls bekannt)
+            return;
+        }
+        if (EXT.equals(lightKey)) { captureExternalThen(() -> { lightKey = null; applyLightsNow(); }); return; }
         String key;
         if (t[0] == 1) key = "w" + t[1] + ":" + t[2];
         else key = "c" + (Color.red(t[1]) >> 3) + "," + (Color.green(t[1]) >> 3) + "," + (Color.blue(t[1]) >> 3) + ":" + t[2];
@@ -2152,10 +2187,8 @@ public class MainActivity extends Activity {
         String[] rules = {
                 "Home Screen  → Farbe der markierten App",
                 "Musik läuft  → Farbe des Covers",
-                "In jeder App  → Markenfarbe (Netflix rot, Disney+ blau …)",
-                "Film läuft  → Markenfarbe, 12 %",
-                "Film pausiert  → Markenfarbe, 30 %",
-                "Streaming-App im Menü  → Markenfarbe, 40 %",
+                "Streaming & Videos  → Lampen laufen in ihrem eigenen Modus (wie vor CleanHome)",
+                "Andere Apps  → Markenfarbe",
                 "PC-Gaming / Moonlight  → lila",
                 "Ruhebildschirm  → Farben der Bildschirm-Ecken",
                 "Fernseher aus  → normales Licht, 50 %",

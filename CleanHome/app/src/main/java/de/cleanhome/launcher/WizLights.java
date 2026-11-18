@@ -96,6 +96,50 @@ public class WizLights {
         });
     }
 
+    /**
+     * Aktuellen Zustand der ersten Lampe lesen (blockiert bis ~1 s, NICHT im UI-Thread).
+     * Rueckgabe: fertige setPilot-Parameter, mit denen sich genau dieser Zustand wiederherstellen laesst
+     * (Szene inkl. Tempo, Weisston oder Farbe), oder null.
+     */
+    public String capture() {
+        String ip;
+        synchronized (this) { if (ips.isEmpty()) return null; ip = ips.get(0); }
+        try (DatagramSocket s = new DatagramSocket()) {
+            s.setSoTimeout(700);
+            byte[] q = "{\"method\":\"getPilot\",\"params\":{}}".getBytes(StandardCharsets.UTF_8);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                s.send(new DatagramPacket(q, q.length, InetAddress.getByName(ip), PORT));
+                try {
+                    byte[] buf = new byte[1024];
+                    DatagramPacket p = new DatagramPacket(buf, buf.length);
+                    s.receive(p);
+                    JSONObject r = new JSONObject(new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8)).getJSONObject("result");
+                    JSONObject o = new JSONObject();
+                    if (!r.optBoolean("state", true)) return "{\"state\":false}";
+                    o.put("state", true);
+                    int scene = r.optInt("sceneId", 0);
+                    if (scene > 0) {
+                        o.put("sceneId", scene);
+                        if (r.has("speed")) o.put("speed", r.optInt("speed"));
+                    } else if (r.optInt("temp", 0) > 0) {
+                        o.put("temp", r.optInt("temp"));
+                    } else {
+                        for (String k : new String[]{"r", "g", "b", "c", "w"}) if (r.has(k)) o.put(k, r.optInt(k));
+                    }
+                    if (r.has("dimming")) o.put("dimming", Math.max(10, r.optInt("dimming")));
+                    return o.toString();
+                } catch (SocketTimeoutException ignored) { }
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    /** Einen mit capture() gemerkten Zustand wieder auf alle Lampen schicken. */
+    public void restore(String params) {
+        if (params == null) return;
+        submit(() -> send("{\"method\":\"setPilot\",\"params\":" + params + "}"));
+    }
+
     /** Lampen ausschalten. */
     public void off() {
         submit(() -> send("{\"method\":\"setPilot\",\"params\":{\"state\":false}}"));
