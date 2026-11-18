@@ -70,6 +70,42 @@ public class GoveeLights {
     }
 
     /**
+     * Aktuelle Helligkeit (1-100) des ersten Govee-Lichts abfragen, -1 wenn keine Antwort.
+     * Blockiert bis ~1,5 s - NICHT im UI-Thread aufrufen.
+     */
+    public int currentBrightness() {
+        JSONObject d = status();
+        if (d == null) return -1;
+        if (d.optInt("onOff", 1) == 0) return -1;
+        int b = d.optInt("brightness", -1);
+        return b >= 1 && b <= 100 ? b : -1;
+    }
+
+    private JSONObject status() {
+        String ip;
+        synchronized (this) { if (ips.isEmpty()) return null; ip = ips.get(0); }
+        try (DatagramSocket rx = new DatagramSocket(null)) {
+            rx.setReuseAddress(true);
+            rx.bind(new InetSocketAddress(LISTEN_PORT));
+            rx.setSoTimeout(500);
+            for (int attempt = 0; attempt < 2; attempt++) {
+                sendTo(ip, "{\"msg\":{\"cmd\":\"devStatus\",\"data\":{}}}");
+                long end = System.currentTimeMillis() + 700;
+                while (System.currentTimeMillis() < end) {
+                    try {
+                        byte[] buf = new byte[1024];
+                        DatagramPacket p = new DatagramPacket(buf, buf.length);
+                        rx.receive(p);
+                        String txt = new String(p.getData(), 0, p.getLength(), StandardCharsets.UTF_8);
+                        if (txt.contains("devStatus")) return new JSONObject(txt).getJSONObject("msg").getJSONObject("data");
+                    } catch (SocketTimeoutException ignored) { break; }
+                }
+            }
+        } catch (Exception ignored) { }
+        return null;
+    }
+
+    /**
      * Aktuelle Farbe des ersten Govee-Lichts abfragen (blockiert bis ~1 s, NICHT im UI-Thread aufrufen).
      * Rueckgabe: Farbe (0xFFrrggbb) oder 0, wenn aus / keine Antwort.
      */

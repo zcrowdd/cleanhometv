@@ -1838,7 +1838,7 @@ public class MainActivity extends Activity {
             if (lightManual.equals(lightManualSent)) return;
             lightManualSent = lightManual;
             lightKey = null;
-            boolean w = wiz.hasLamps(), g = govee.hasLamps();
+            boolean w = wiz.hasLamps(), g = false;   // Govee: nur das programmierte Dimmen, sonst wie eingestellt
             switch (lightManual) {
                 case "bright": if (w) wiz.white(3200, 100); if (g) { govee.power(true); govee.brightness(100); } break;
                 case "dim":    if (w) wiz.white(2400, 20);  if (g) { govee.power(true); govee.brightness(15); } break;
@@ -1847,7 +1847,6 @@ public class MainActivity extends Activity {
             return;
         }
         if (lightManualSent != null) {             // zurueck zur Automatik
-            if ("off".equals(lightManualSent) && govee.hasLamps()) govee.power(true);
             lightManualSent = null;
             lightKey = null;
             govee.forget();
@@ -2099,13 +2098,39 @@ public class MainActivity extends Activity {
         govee.setLamps(goveeIps);
     }
 
-    /** Streaming-App vorne -> gedimmt, sonst normale Helligkeit. Farbe bleibt immer wie in der Govee-App. */
+    /**
+     * Govee: CleanHome fasst die Helligkeit NUR an, wenn eine Streaming-App vorne ist.
+     * Vorher wird die aktuelle Helligkeit ausgelesen und gemerkt (auch ueber Neustarts),
+     * danach kommt genau diese Helligkeit zurueck. Sonst wird nie etwas gesendet.
+     */
+    private boolean goveeBusy;
+
     private void applyGovee() {
-        if (!goveeOn || !govee.hasLamps()) return;
+        if (!goveeOn || !govee.hasLamps() || goveeBusy) return;
         boolean streaming = screenOn && !homeVisible
                 && (saver == null || saver.getVisibility() != View.VISIBLE)
                 && appKind(fgPkg()) == K_VIDEO;
-        govee.brightness(streaming ? goveeDim : goveeNormal);
+        final SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        boolean dimmed = p.getBoolean("govee_dimmed", false);
+        if (streaming && !dimmed) {
+            goveeBusy = true;
+            new Thread(() -> {
+                int cur = govee.currentBrightness();               // eigene Helligkeit merken
+                ui.post(() -> {
+                    goveeBusy = false;
+                    if (cur > 0) p.edit().putInt("govee_saved", cur).apply();
+                    else if (p.getInt("govee_saved", -1) <= 0) return;   // Helligkeit unbekannt -> lieber nicht dimmen
+                    p.edit().putBoolean("govee_dimmed", true).apply();
+                    govee.forget();
+                    govee.brightness(goveeDim);
+                });
+            }, "goveeSave").start();
+        } else if (!streaming && dimmed) {
+            int back = p.getInt("govee_saved", -1);
+            p.edit().putBoolean("govee_dimmed", false).apply();
+            govee.forget();
+            if (back > 0) govee.brightness(back);              // genau die gemerkte Helligkeit
+        }
     }
 
     private void openGoveeMenu() {
@@ -2117,17 +2142,17 @@ public class MainActivity extends Activity {
             ui.postDelayed(this::openGoveeMenu, 200);
         }));
         items.add(new MItem((!goveeOn ? "●  " : "○  ") + "Aus   — CleanHome lässt Govee in Ruhe", () -> {
-            if (goveeOn) govee.brightness(goveeNormal);
+            if (goveeOn) {                       // falls gerade gedimmt: gemerkte Helligkeit zurueck
+                SharedPreferences sp = getSharedPreferences(PREFS, MODE_PRIVATE);
+                if (sp.getBoolean("govee_dimmed", false) && sp.getInt("govee_saved", -1) > 0) govee.brightness(sp.getInt("govee_saved", 100));
+                sp.edit().putBoolean("govee_dimmed", false).apply();
+            }
             goveeOn = false; saveGovee();
             toast("Govee: aus");
             ui.postDelayed(this::openGoveeMenu, 200);
         }));
-        items.add(new MItem("Helligkeit normal  ·  " + goveeNormal + " %", () -> {
-            int[] v = {100, 80, 60, 40};
-            int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeNormal) k = (x + 1) % v.length;
-            goveeNormal = v[k]; saveGovee(); govee.forget(); scheduleLights(0);
-            ui.postDelayed(this::openGoveeMenu, 150);
-        }));
+        int saved = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("govee_saved", -1);
+        items.add(new MItem("ⓘ  Deine Helligkeit wird gemerkt" + (saved > 0 ? "  ·  zuletzt " + saved + " %" : ""), () -> ui.postDelayed(this::openGoveeMenu, 150)));
         items.add(new MItem("Helligkeit bei Streaming  ·  " + goveeDim + " %", () -> {
             int[] v = {5, 10, 15, 25, 40};
             int k = 0; for (int x = 0; x < v.length; x++) if (v[x] == goveeDim) k = (x + 1) % v.length;
@@ -2141,7 +2166,7 @@ public class MainActivity extends Activity {
             boolean on = goveeIps.contains(ip);
             String model = goveeFound.containsKey(ip) ? goveeFound.get(ip) + "  " : "";
             items.add(new MItem((on ? "☑  " : "☐  ") + model + ip, () -> {
-                if (goveeIps.contains(ip)) goveeIps.remove(ip); else { goveeIps.add(ip); govee.blink(ip); }
+                if (goveeIps.contains(ip)) goveeIps.remove(ip); else goveeIps.add(ip);
                 saveGovee();
                 ui.postDelayed(this::openGoveeMenu, 200);
             }));
@@ -2161,7 +2186,6 @@ public class MainActivity extends Activity {
                     goveeIps.addAll(found.keySet());
                     goveeOn = true;
                     saveGovee();
-                    for (String ip : found.keySet()) govee.blink(ip);
                     scheduleLights(2500);
                 }
             }
