@@ -126,7 +126,7 @@ public class MainActivity extends Activity {
 
     // ---------------------------------------------------------------- Daten
     static class AppInfo {
-        String pkg, label;
+        String pkg, label, src;     // src: bei "Weiterschauen" die eigentliche App
         Intent launch;
         Drawable banner, icon;
         int color = BLUE;
@@ -285,6 +285,11 @@ public class MainActivity extends Activity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         readPcExtras(intent);
+        if (intent != null && intent.getBooleanExtra("reload_games", false)) {
+            intent.removeExtra("reload_games");
+            loadApps();
+            ui.postDelayed(() -> toast(gameApps.size() + " PC-Spiele geladen"), 1200);
+        }
         hideSaver();
         hideMenu();
         if (movingPkg != null) endMove();
@@ -716,12 +721,16 @@ public class MainActivity extends Activity {
             collect(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, map);
             collect(pm, Intent.CATEGORY_LAUNCHER, map);
             List<AppInfo> list = new ArrayList<>(map.values());
+            final List<AppInfo> games = readGames();
             Collator c = Collator.getInstance(Locale.GERMANY);
             Collections.sort(list, (x, y) -> c.compare(x.label, y.label));
             ui.post(() -> {
                 apps.clear();
                 apps.add(pcApp());
                 apps.addAll(list);
+                gameApps.clear();
+                gameApps.addAll(games);
+                buildResumeApps();
                 if (rows == null) loadRows();
                 SharedPreferences pp = getSharedPreferences(PREFS, MODE_PRIVATE);
                 if (!pp.getBoolean(KEY_PC_ADDED, false)) {
@@ -781,8 +790,210 @@ public class MainActivity extends Activity {
     }
 
     private AppInfo find(String pkg) {
+        if (pkg == null) return null;
         for (AppInfo a : apps) if (a.pkg.equals(pkg)) return a;
+        for (AppInfo a : extraApps) if (a.pkg.equals(pkg)) return a;
         return null;
+    }
+
+    // ================================================================ PC-Spiele + Weiterschauen
+
+    private static final String GAME_PREFIX = "pcgame:", RESUME_PREFIX = "resume:";
+    private static final String ROW_RESUME = "x_resume", ROW_GAMES = "x_games";
+    private final List<AppInfo> extraApps = new ArrayList<>();
+    private final List<AppInfo> gameApps = new ArrayList<>(), resumeApps = new ArrayList<>();
+    private String gamePcUuid = "", gamePcName = "";
+
+    /** Liest die von games.ps1 geschickte Spieleliste (games.json + Kachelbilder). Im Hintergrund-Thread aufrufen. */
+    private List<AppInfo> readGames() {
+        List<AppInfo> out = new ArrayList<>();
+        try {
+            java.io.File dir = getExternalFilesDir("games");
+            java.io.File f = dir != null ? new java.io.File(dir, "games.json") : null;
+            if (f == null || !f.exists()) return out;
+            byte[] b = new byte[(int) f.length()];
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) { int o = 0, r; while (o < b.length && (r = in.read(b, o, b.length - o)) > 0) o += r; }
+            String txt = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+            if (txt.startsWith("\uFEFF")) txt = txt.substring(1);
+            org.json.JSONObject root = new org.json.JSONObject(txt);
+            org.json.JSONObject pc = root.optJSONObject("pc");
+            if (pc != null) { gamePcUuid = pc.optString("uuid", ""); gamePcName = pc.optString("name", ""); }
+            org.json.JSONArray arr = root.optJSONArray("games");
+            if (arr == null) { org.json.JSONObject one = root.optJSONObject("games"); arr = new org.json.JSONArray(); if (one != null) arr.put(one); }
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject g = arr.getJSONObject(i);
+                String name = g.optString("name", "");
+                if (name.isEmpty()) continue;
+                AppInfo a = new AppInfo();
+                a.pkg = GAME_PREFIX + name;
+                a.label = name;
+                String img = g.optString("img", "");
+                Bitmap bm = null;
+                if (!img.isEmpty()) {
+                    android.graphics.BitmapFactory.Options o = new android.graphics.BitmapFactory.Options();
+                    o.inPreferredConfig = Bitmap.Config.RGB_565;
+                    bm = android.graphics.BitmapFactory.decodeFile(new java.io.File(dir, img).getAbsolutePath(), o);
+                }
+                int col = gameColor(name, bm);
+                a.color = col;
+                a.banner = bm != null ? new android.graphics.drawable.BitmapDrawable(getResources(), bm)
+                        : textBanner(name, g.optString("src", "PC").toUpperCase(Locale.ROOT) + "  ·  PC", col, null);
+                out.add(a);
+            }
+        } catch (Exception ignored) { }
+        return out;
+    }
+
+    private static int gameColor(String name, Bitmap bm) {
+        String n = name.toLowerCase(Locale.ROOT);
+        if (n.contains("valorant")) return 0xFFFF4655;
+        if (n.contains("fortnite")) return 0xFF8B5CF6;
+        if (bm != null) {
+            Bitmap one = Bitmap.createScaledBitmap(bm, 1, 1, true);
+            int c = one.getPixel(0, 0);
+            float[] hsv = new float[3];
+            Color.colorToHSV(c, hsv);
+            hsv[1] = Math.max(0.5f, hsv[1]); hsv[2] = Math.max(0.75f, hsv[2]);
+            return Color.HSVToColor(hsv);
+        }
+        return C_GAMING;
+    }
+
+    /** Kachel aus Text: dunkler Verlauf in der Akzentfarbe, grosser Titel, Zusatzzeile. Optional ein abgedunkeltes Bild dahinter. */
+    private Drawable textBanner(String title, String sub, int color, Drawable behind) {
+        int w = 640, h = 360;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+        Canvas c = new Canvas(bmp);
+        if (behind != null) {
+            behind.setBounds(0, 0, w, h);
+            behind.draw(c);
+            Paint dim = new Paint();
+            dim.setShader(new LinearGradient(0, 0, 0, h, 0x66000000, 0xF0000000, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, dim);
+        } else {
+            Paint bg = new Paint();
+            bg.setShader(new LinearGradient(0, 0, w, h, blendDark(color), 0xFF050505, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, bg);
+            Paint glowP = new Paint(Paint.ANTI_ALIAS_FLAG);
+            glowP.setShader(new android.graphics.RadialGradient(w * 0.85f, h * 0.15f, 340,
+                    (color & 0x00FFFFFF) | 0x99000000, color & 0x00FFFFFF, Shader.TileMode.CLAMP));
+            c.drawRect(0, 0, w, h, glowP);
+        }
+        Paint t = new Paint(Paint.ANTI_ALIAS_FLAG);
+        t.setColor(0xFFFFFFFF);
+        t.setTypeface(fBold);
+        t.setLetterSpacing(-0.02f);
+        float size = 72;
+        t.setTextSize(size);
+        while (t.measureText(title) > w - 88 && size > 36) { size -= 4; t.setTextSize(size); }
+        String tt = title;
+        while (t.measureText(tt + "…") > w - 88 && tt.length() > 3) tt = tt.substring(0, tt.length() - 1);
+        if (!tt.equals(title)) tt = tt + "…";
+        c.drawText(tt, 44, 250, t);
+        Paint m = new Paint(Paint.ANTI_ALIAS_FLAG);
+        m.setColor(0xFFB5B5B5);
+        m.setTypeface(fMono);
+        m.setTextSize(26);
+        m.setLetterSpacing(0.08f);
+        c.drawText(sub, 46, 300, m);
+        Paint bar = new Paint();
+        bar.setColor(color);
+        c.drawRect(0, h - 8, w, h, bar);
+        return new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
+    }
+
+    private static int blendDark(int c) {
+        return 0xFF000000 | ((((c >> 16) & 255) * 35 / 100) << 16) | ((((c >> 8) & 255) * 35 / 100) << 8) | ((c & 255) * 35 / 100);
+    }
+
+    // ---- Weiterschauen: was zuletzt in Video-Apps lief
+    private String lastHistKey;
+
+    private void recordHistory(String pkg, String title) {
+        if (pkg == null || title == null || title.isEmpty() || "Unbekannt".equals(title)) return;
+        if (appKind(pkg) != K_VIDEO) return;
+        String key = pkg + "|" + title;
+        if (key.equals(lastHistKey)) return;
+        lastHistKey = key;
+        try {
+            SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+            org.json.JSONArray old = new org.json.JSONArray(p.getString("history", "[]"));
+            org.json.JSONArray neu = new org.json.JSONArray();
+            org.json.JSONObject e = new org.json.JSONObject();
+            e.put("p", pkg); e.put("t", title); e.put("ts", System.currentTimeMillis());
+            neu.put(e);
+            for (int i = 0; i < old.length() && neu.length() < 8; i++) {
+                org.json.JSONObject o = old.getJSONObject(i);
+                if (o.optString("p").equals(pkg) && o.optString("t").equals(title)) continue;
+                neu.put(o);
+            }
+            p.edit().putString("history", neu.toString()).apply();
+            buildResumeApps();
+            if (homeVisible && isFront) render(null, null);
+        } catch (Exception ignored) { }
+    }
+
+    private void buildResumeApps() {
+        resumeApps.clear();
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("history", "[]"));
+            for (int i = 0; i < arr.length(); i++) {
+                org.json.JSONObject o = arr.getJSONObject(i);
+                AppInfo src = null;
+                for (AppInfo a : apps) if (a.pkg.equals(o.optString("p"))) src = a;
+                if (src == null) continue;                       // App deinstalliert
+                AppInfo a = new AppInfo();
+                a.pkg = RESUME_PREFIX + i;
+                a.label = o.optString("t");
+                a.color = brandColor(src.pkg);
+                a.launch = src.launch;
+                a.src = src.pkg;
+                a.banner = textBanner(a.label, (src.label + "  ·  " + ago(o.optLong("ts"))).toUpperCase(Locale.GERMANY), a.color,
+                        src.banner != null ? src.banner.getConstantState() != null ? src.banner.getConstantState().newDrawable().mutate() : null : null);
+                resumeApps.add(a);
+            }
+        } catch (Exception ignored) { }
+        rebuildExtras();
+    }
+
+    private void rebuildExtras() {
+        extraApps.clear();
+        extraApps.addAll(resumeApps);
+        extraApps.addAll(gameApps);
+    }
+
+    private static String ago(long ts) {
+        long m = (System.currentTimeMillis() - ts) / 60000;
+        if (m < 2) return "gerade eben";
+        if (m < 60) return "vor " + m + " Min";
+        long h = m / 60;
+        if (h < 24) return "vor " + h + " Std";
+        long d = h / 24;
+        return d == 1 ? "gestern" : "vor " + d + " Tagen";
+    }
+
+    /** Eine automatische Reihe (Weiterschauen / PC-Spiele) in den Home Screen haengen. */
+    private void addAutoRow(String id, String name, List<AppInfo> list) {
+        if (list.isEmpty()) return;
+        TextView cnt = tv(11, GRAY_2, fMono);
+        cnt.setText(String.format(Locale.ROOT, "%02d", list.size()));
+        rowsBox.addView(sectionHeader(name, cnt, rowsBox.getChildCount() == 0 ? 28 : 16));
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        hs.setClipChildren(false);
+        hs.setClipToPadding(false);
+        LinearLayout line = new LinearLayout(this);
+        line.setClipChildren(false);
+        line.setClipToPadding(false);
+        line.setPadding(dp(32), dp(12), dp(32), dp(12));
+        hs.addView(line);
+        LinearLayout.LayoutParams hlp = new LinearLayout.LayoutParams(-1, -2);
+        hlp.leftMargin = -dp(32);
+        hlp.rightMargin = -dp(32);
+        hlp.topMargin = -dp(8);
+        hlp.bottomMargin = -dp(8);
+        rowsBox.addView(hs, hlp);
+        for (AppInfo a : list) line.addView(tile(a, id, true));
     }
 
     private boolean visible(String pkg) {
@@ -871,7 +1082,9 @@ public class MainActivity extends Activity {
         rowsBox.removeAllViews();
         grid.removeAllViews();
 
+        boolean resumeDone = false;
         for (Row r : rows) {
+            if (!resumeDone && !r.id.equals(FAV)) { addAutoRow(ROW_RESUME, "WEITERSCHAUEN", resumeApps); resumeDone = true; }
             List<String> vis = new ArrayList<>();
             for (String p : r.apps) if (visible(p)) vis.add(p);
             if (vis.isEmpty() && !r.id.equals(FAV)) continue;
@@ -907,6 +1120,9 @@ public class MainActivity extends Activity {
             rowsBox.addView(hs, hlp);
             for (String p : vis) line.addView(tile(find(p), r.id, true));
         }
+
+        if (!resumeDone) addAutoRow(ROW_RESUME, "WEITERSCHAUEN", resumeApps);
+        addAutoRow(ROW_GAMES, "PC-SPIELE", gameApps);
 
         boolean pcInRow = false;
         for (Row r : rows) if (r.apps.contains(PC_PKG)) pcInRow = true;
@@ -1302,6 +1518,7 @@ public class MainActivity extends Activity {
     private TextView[] pcStepDot = new TextView[3], pcStepText = new TextView[3], pcStepInfo = new TextView[3];
     private TextView pcHeadline, pcFoot;
     private volatile boolean pcCancel;
+    private String pcGameName;
     private final List<String[]> pcFound = new ArrayList<>();
 
     private AppInfo pcApp() {
@@ -1367,7 +1584,9 @@ public class MainActivity extends Activity {
     private String pcIp() { return getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_PC_IP, ""); }
     private String pcMac() { return getSharedPreferences(PREFS, MODE_PRIVATE).getString(KEY_PC_MAC, ""); }
 
-    private void startPcGaming() {
+    private void startPcGaming() { startPcGaming(null); }
+
+    private void startPcGaming(String game) {
         String ip = pcIp(), mac = pcMac();
         if (ip.isEmpty()) { openPcSetup(); return; }
         if (getPackageManager().getLaunchIntentForPackage(MOONLIGHT) == null) {
@@ -1375,6 +1594,7 @@ public class MainActivity extends Activity {
             return;
         }
         pcStarting = true;
+        pcGameName = game;
         scheduleLights(0);
         showPcLayer();
         pcCancel = false;
@@ -1411,11 +1631,24 @@ public class MainActivity extends Activity {
             try { Thread.sleep(700); } catch (InterruptedException ignored) { }
             if (pcCancel) return;
             ui.post(() -> {
-                pcStep(2, "done", "los geht's");
+                pcStep(2, "done", game != null ? game : "los geht's");
                 Intent ml = getPackageManager().getLaunchIntentForPackage(MOONLIGHT);
                 lastLaunchedPkg = MOONLIGHT;
+                HomeWatchService.lastForegroundPkg = MOONLIGHT;
                 pcStarting = false;
-                if (ml != null) startActivity(ml.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                boolean started = false;
+                if (game != null) {
+                    // Direkt ins Spiel: Moonlights eigener Verknuepfungs-Einstieg (PC + Spielname)
+                    try {
+                        Intent g = new Intent(Intent.ACTION_MAIN).setClassName(MOONLIGHT, "com.limelight.ShortcutTrampoline")
+                                .putExtra("AppName", game).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        if (!gamePcUuid.isEmpty()) g.putExtra("UUID", gamePcUuid);
+                        if (!gamePcName.isEmpty()) g.putExtra("Name", gamePcName);
+                        startActivity(g);
+                        started = true;
+                    } catch (Exception ignored) { }
+                }
+                if (!started && ml != null) startActivity(ml.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 ui.postDelayed(this::hidePcLayer, 900);
             });
         }).start();
@@ -1423,7 +1656,7 @@ public class MainActivity extends Activity {
 
     private void showPcLayer() {
         if (pcLayer == null) buildPcLayer();
-        String[][] steps = {{"Wake-on-LAN senden", ""}, {"Warten bis der PC online ist", ""}, {"Moonlight starten", ""}};
+        String[][] steps = {{"Wake-on-LAN senden", ""}, {"Warten bis der PC online ist", ""}, {pcGameName != null ? pcGameName + " starten" : "Moonlight starten", ""}};
         for (int i = 0; i < 3; i++) {
             pcStepText[i].setText(steps[i][0]);
             pcStep(i, "wait", "");
@@ -1674,7 +1907,7 @@ public class MainActivity extends Activity {
 
     private int appKind(String pkg) {
         if (pkg == null) return K_OTHER;
-        if (MOONLIGHT.equals(pkg) || PC_PKG.equals(pkg)) return K_GAME;
+        if (MOONLIGHT.equals(pkg) || PC_PKG.equals(pkg) || pkg.startsWith(GAME_PREFIX)) return K_GAME;
         for (String v : VIDEO_PKGS) if (v.equals(pkg)) return K_VIDEO;
         for (String v : AUDIO_PKGS) if (v.equals(pkg)) return K_AUDIO;
         if (Build.VERSION.SDK_INT >= 26) {
@@ -2506,6 +2739,7 @@ public class MainActivity extends Activity {
         String artist = firstNonEmpty(md.getString(android.media.MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE),
                 md.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST),
                 md.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM_ARTIST), "");
+        if (stateOf(c) == android.media.session.PlaybackState.STATE_PLAYING) recordHistory(c.getPackageName(), title);
         AppInfo app = find(c.getPackageName());
         npApp.setText(((app != null ? app.label : c.getPackageName()) + "  ·  ♪").toUpperCase(Locale.GERMANY));
         npTitle.setText(title);
@@ -3181,6 +3415,12 @@ public class MainActivity extends Activity {
 
     private void launch(AppInfo a) {
         if (PC_PKG.equals(a.pkg)) { startPcGaming(); return; }
+        if (a.pkg.startsWith(GAME_PREFIX)) { startPcGaming(a.label); return; }
+        if (a.pkg.startsWith(RESUME_PREFIX)) {
+            AppInfo real = a.src != null ? find(a.src) : null;
+            if (real != null) launch(real); else toast("Die App ist nicht mehr installiert");
+            return;
+        }
         lastLaunchedPkg = a.pkg;
         HomeWatchService.lastForegroundPkg = a.pkg;
         lastLeftByLaunch = System.currentTimeMillis();
@@ -3325,7 +3565,7 @@ public class MainActivity extends Activity {
     private View launchFx;
 
     private void launchWithTransition(View tileV, AppInfo a) {
-        if (PC_PKG.equals(a.pkg) || root.getWidth() == 0) { launch(a); return; }
+        if (PC_PKG.equals(a.pkg) || a.pkg.startsWith(GAME_PREFIX) || root.getWidth() == 0) { launch(a); return; }
         clearLaunchFx();
         int[] loc = new int[2], rl = new int[2];
         tileV.getLocationInWindow(loc);
