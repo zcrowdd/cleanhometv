@@ -1702,8 +1702,10 @@ public class MainActivity extends Activity {
             t = new int[]{1, 2700, 50};                               // TV aus -> normales Raumlicht
         } else if (saver != null && saver.getVisibility() == View.VISIBLE) {
             t = new int[]{1, 2200, 10};                               // Bildschirmschoner -> fast dunkel
-        } else if (pcStarting || (!homeVisible && appKind(fgPkg()) == K_GAME)) {
-            t = new int[]{0, C_GAMING, 60};                           // Gaming -> lila
+        } else if (pcStarting) {
+            t = new int[]{0, C_GAMING, 60};                           // PC wird gestartet -> lila
+        } else if (!homeVisible) {
+            return null;                                              // irgendeine App vorne -> Sync-Box (Cinematic)
         } else if (homeVisible) {
             android.media.session.MediaController music = null;
             for (android.media.session.MediaController c : watched)
@@ -1785,15 +1787,23 @@ public class MainActivity extends Activity {
     }
 
     /** Bevor CleanHome nach dem Streaming wieder steuert: den Modus der Lampe merken (Szene, Weiss, Farbe). */
+    // Sync-Modi der WiZ HDMI Sync Box (getModelConfig: syncboxAlgos 201-204), 201 = Cinematic
+    private static final String SYNC_DEFAULT = "{\"state\":true,\"sceneId\":201,\"dimming\":26}";
+    private final Runnable resendSync = () -> {
+        if (EXT.equals(lightKey) && wizOn)
+            wiz.restore(getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_sync", SYNC_DEFAULT));
+    };
+
     private void captureExternalThen(Runnable next) {
         wizCapturing = true;
         new Thread(() -> {
             String st = wiz.capture();
             ui.post(() -> {
                 wizCapturing = false;
-                if (st != null) {
-                    wizExternal = st;
-                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("wiz_external", st).apply();
+                // nur echte Sync-Modi (Szene 201-204) merken - z. B. wenn du in der WiZ-App
+                // Helligkeit oder Modus (Cinematic/Relaxation/Vibrant/Rhythmic) geaendert hast
+                if (st != null && st.matches(".*\"sceneId\":20[1-4].*")) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("wiz_sync", st).apply();
                 }
                 lightKey = "captured";
                 next.run();
@@ -1847,12 +1857,22 @@ public class MainActivity extends Activity {
         if (screenOn && saver != null && saver.getVisibility() == View.VISIBLE) { sendSaverLights(); return; }
         int[] t = lightTarget();
         if (t == null) {
-            // Streaming/Video: die Sync-Box steuert die Lampen. CleanHome schickt KEINEN Befehl -
-            // auch laufende Ueberblendungen und Wiederholungen werden sofort gestoppt.
+            // Eine App ist vorne: WiZ HDMI Sync Box in ihren Sync-Modus schalten (Cinematic = Szene 201,
+            // bzw. der Sync-Modus, den du zuletzt in der WiZ-App gewaehlt hattest). Danach schickt
+            // CleanHome nichts mehr - die Box reagiert auf Film, Serie oder Spiel.
             if (EXT.equals(lightKey)) return;
             lightKey = EXT;
             ui.removeCallbacks(resendLights);
             wiz.cancel();
+            String sync = getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_sync", SYNC_DEFAULT);
+            wiz.restore(sync);
+            ui.removeCallbacks(resendSync);
+            ui.postDelayed(resendSync, 1500);                     // UDP absichern
+            return;
+        }
+        if (EXT.equals(lightKey)) {                                // zurueck zu CleanHome: erst Sync-Einstellung merken
+            ui.removeCallbacks(resendSync);
+            captureExternalThen(() -> { lightKey = null; applyLightsNow(); });
             return;
         }
         String key;
@@ -2184,8 +2204,8 @@ public class MainActivity extends Activity {
         String[] rules = {
                 "Home Screen  → Farbe der markierten App",
                 "Musik läuft  → Farbe des Covers",
-                "Streaming & Videos  → Sync-Box steuert, CleanHome schickt nichts",
-                "Andere Apps  → Markenfarbe",
+                "App gestartet  → Sync Box: Cinematic (reagiert aufs Bild)",
+                "Modus/Helligkeit in der WiZ-App geändert  → wird gemerkt",
                 "PC-Gaming / Moonlight  → lila",
                 "Ruhebildschirm  → Farben der Bildschirm-Ecken",
                 "Fernseher aus  → normales Licht, 50 %",
