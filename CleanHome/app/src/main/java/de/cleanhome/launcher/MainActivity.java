@@ -208,6 +208,9 @@ public class MainActivity extends Activity {
         });
         readPcExtras(getIntent());
         createdThisBoot = true;
+        try {
+            ((android.hardware.input.InputManager) getSystemService(INPUT_SERVICE)).registerInputDeviceListener(padListener, ui);
+        } catch (Exception ignored) { }
         startRemote();
         HomeWatchService.start(this);
         KeepAliveJob.schedule(this);
@@ -323,6 +326,16 @@ public class MainActivity extends Activity {
     @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
+        // Controller: A = OK, B = Zurueck (damit CleanHome komplett mit dem Gamepad bedienbar ist)
+        if (k == KeyEvent.KEYCODE_BUTTON_A || k == KeyEvent.KEYCODE_BUTTON_B) {
+            int nk = k == KeyEvent.KEYCODE_BUTTON_A ? KeyEvent.KEYCODE_DPAD_CENTER : KeyEvent.KEYCODE_BACK;
+            return dispatchKeyEvent(new KeyEvent(e.getDownTime(), e.getEventTime(), e.getAction(), nk, e.getRepeatCount(),
+                    e.getMetaState(), e.getDeviceId(), e.getScanCode(), e.getFlags(), e.getSource()));
+        }
+        if (ambientLayer != null) {
+            if (e.getAction() == KeyEvent.ACTION_UP) closeAmbient();
+            return true;
+        }
         if (qrLayer != null) {
             if (e.getAction() == KeyEvent.ACTION_UP) { final View q = qrLayer; qrLayer = null; q.animate().alpha(0f).setDuration(150).withEndAction(() -> root.removeView(q)).start(); }
             return true;
@@ -1373,6 +1386,10 @@ public class MainActivity extends Activity {
             if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
+        items.add(new MItem("STIMMUNG", null));
+        items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(AmbientScene.FIRE)));
+        items.add(new MItem("🌧  Regen am Fenster", () -> openAmbient(AmbientScene.RAIN)));
+        items.add(new MItem("✦  Sternenhimmel", () -> openAmbient(AmbientScene.STARS)));
         items.add(new MItem("SPEICHER", null));
         items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
         items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
@@ -2066,7 +2083,158 @@ public class MainActivity extends Activity {
     private String wizExternal;
     private boolean wizCapturing;
 
+    // ================================================================ Stimmungs-Szenen
+
+    private FrameLayout ambientLayer;
+    private AmbientScene ambientScene;
+    private int ambientType = -1;
+    private long lightFlashUntil;
+    private final List<View> hiddenUnderAmbient = new ArrayList<>();
+
+    private void openAmbient(int type) {
+        hideMenu();
+        hideSaver();
+        if (ambientLayer != null) closeAmbient();
+        ambientType = type;
+        FrameLayout l = new FrameLayout(this);
+        l.setClickable(true);
+        AmbientScene sc = new AmbientScene(this, type, LITE);
+        sc.setEvents(kind -> ui.post(() -> ambientFlash(kind)));
+        l.addView(sc, new FrameLayout.LayoutParams(-1, -1));
+        TextView hint = tv(13, 0x66FFFFFF, fMono);
+        hint.setText("BELIEBIGE TASTE = ZURÜCK");
+        hint.setLetterSpacing(0.25f);
+        FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        hl.bottomMargin = dp(28);
+        l.addView(hint, hl);
+        hint.animate().alpha(0f).setStartDelay(3500).setDuration(1500).start();
+        l.setAlpha(0f);
+        root.addView(l, new FrameLayout.LayoutParams(-1, -1));
+        ambientLayer = l;
+        ambientScene = sc;
+        sc.start();
+        l.animate().alpha(1f).setDuration(1200).withEndAction(() -> {
+            if (ambientLayer != l) return;
+            int idx = root.indexOfChild(l);          // darunter liegende Ebenen nicht mehr mitzeichnen
+            for (int i = 0; i < idx; i++) {
+                View v = root.getChildAt(i);
+                if (v.getVisibility() == View.VISIBLE) { v.setVisibility(View.INVISIBLE); hiddenUnderAmbient.add(v); }
+            }
+        }).start();
+        ui.removeCallbacks(ambientLights);
+        ui.post(ambientLights);
+        ui.removeCallbacks(showSaver);
+    }
+
+    private void closeAmbient() {
+        final FrameLayout l = ambientLayer;
+        if (l == null) return;
+        ambientLayer = null;
+        ambientType = -1;
+        for (View v : hiddenUnderAmbient) v.setVisibility(View.VISIBLE);
+        hiddenUnderAmbient.clear();
+        ui.removeCallbacks(ambientLights);
+        l.animate().alpha(0f).setDuration(400).withEndAction(() -> {
+            if (ambientScene != null) ambientScene.stop();
+            root.removeView(l);
+        }).start();
+        lightKey = null;
+        scheduleLights(0);
+        resetIdle();
+        focusFirst();
+    }
+
+    /** Licht passend zur Szene: Kamin flackert orange, Regen kuehl blau, Sterne tiefblau/violett. Govee bleibt unberuehrt. */
+    private final Runnable ambientLights = new Runnable() {
+        @Override public void run() {
+            if (ambientLayer == null) return;
+            long next = 1500;
+            if (wizOn && wiz.hasLamps() && lightManual == null && android.os.SystemClock.uptimeMillis() > lightFlashUntil) {
+                lightKey = "ambient";
+                int r, g, b, dim;
+                if (ambientType == AmbientScene.FIRE) {
+                    r = 255; g = 70 + rnd.nextInt(70); b = rnd.nextInt(14); dim = 30 + rnd.nextInt(40);
+                    next = 220 + rnd.nextInt(260);                      // unruhig wie echtes Feuer
+                } else if (ambientType == AmbientScene.RAIN) {
+                    r = 20 + rnd.nextInt(15); g = 60 + rnd.nextInt(25); b = 200 + rnd.nextInt(55); dim = 18 + rnd.nextInt(10);
+                    next = 2500;
+                } else {
+                    boolean violet = rnd.nextBoolean();
+                    r = violet ? 70 : 20; g = violet ? 30 : 40; b = 200 + rnd.nextInt(55); dim = 12 + rnd.nextInt(8);
+                    next = 3500;
+                }
+                wiz.restore("{\"state\":true,\"r\":" + r + ",\"g\":" + g + ",\"b\":" + b + ",\"dimming\":" + dim + "}");
+            }
+            ui.postDelayed(this, next);
+        }
+    };
+
+    /** Blitz beim Gewitter bzw. kurzes Aufleuchten bei einer Sternschnuppe. */
+    private void ambientFlash(int kind) {
+        if (ambientLayer == null || !wizOn || !wiz.hasLamps() || lightManual != null) return;
+        lightFlashUntil = android.os.SystemClock.uptimeMillis() + 900;
+        wiz.restore("{\"state\":true,\"temp\":6500,\"dimming\":" + (kind == AmbientScene.RAIN ? 100 : 45) + "}");
+    }
+
+    // ================================================================ Controller erkennen
+
+    private long lastPadAt;
+    private final android.hardware.input.InputManager.InputDeviceListener padListener =
+            new android.hardware.input.InputManager.InputDeviceListener() {
+                @Override public void onInputDeviceAdded(int id) { ui.postDelayed(() -> onPadAdded(id), 400); }
+                @Override public void onInputDeviceRemoved(int id) { }
+                @Override public void onInputDeviceChanged(int id) { }
+            };
+
+    private static boolean isGamepad(android.view.InputDevice d) {
+        if (d == null || d.isVirtual()) return false;
+        int s = d.getSources();
+        return (s & android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD
+                || (s & android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK;
+    }
+
+    private void onPadAdded(int id) {
+        android.view.InputDevice d = android.view.InputDevice.getDevice(id);
+        if (!isGamepad(d)) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        if (now - lastPadAt < 60_000) return;                    // kurzes Wackeln der Verbindung ignorieren
+        lastPadAt = now;
+        int vendor = d.getVendorId();
+        String kind; int col;
+        if (vendor == 0x045E) { kind = "Xbox-Controller"; col = 0xFF107C10; }
+        else if (vendor == 0x054C) { kind = "PlayStation-Controller"; col = 0xFF0070D1; }
+        else { kind = "Controller"; col = C_GAMING; }
+        // Licht leuchtet einmal in der Controller-Farbe auf
+        if (wizOn && wiz.hasLamps() && lightManual == null && ambientLayer == null) {
+            lightFlashUntil = now + 1400;
+            wiz.restore("{\"state\":true,\"r\":" + Color.red(col) + ",\"g\":" + Color.green(col) + ",\"b\":" + Color.blue(col) + ",\"dimming\":100}");
+            ui.postDelayed(() -> { lightKey = null; scheduleLights(0); }, 1500);
+        }
+        if (!isFront) { toast("🎮 " + kind + " verbunden"); return; }   // in einer App: nicht dazwischenfunken
+        if (ambientLayer != null) closeAmbient();
+        hideSaver();
+        // in die Reihe PC-Spiele springen (oder auf die PC-Kachel)
+        View target = !gameApps.isEmpty() ? root.findViewWithTag(ROW_GAMES + "|" + gameApps.get(0).pkg) : null;
+        if (target == null) {
+            for (Row r : rows) if (r.apps.contains(PC_PKG)) target = root.findViewWithTag(r.id + "|" + PC_PKG);
+        }
+        if (target == null) target = root.findViewWithTag(ALL + "|" + PC_PKG);
+        if (target != null) target.requestFocus();
+        List<MItem> items = new ArrayList<>();
+        items.add(new MItem("▶  PC starten", this::startPcGaming));
+        if (!gameApps.isEmpty()) {
+            items.add(new MItem("SPIEL DIREKT STARTEN", null));
+            for (int i = 0; i < Math.min(6, gameApps.size()); i++) {
+                final AppInfo g = gameApps.get(i);
+                items.add(new MItem(g.label, () -> launch(g)));
+            }
+        }
+        items.add(new MItem("Nicht jetzt", () -> { }));
+        showMenu("🎮  " + kind + " verbunden – PC starten?", items);
+    }
+
     private void applyLightsNow() {
+        if (ambientLayer != null || android.os.SystemClock.uptimeMillis() < lightFlashUntil) return;   // Szene / Aufleuchten
         if (lightManual != null) {
             if (lightManual.equals(lightManualSent)) return;
             lightManualSent = lightManual;
@@ -2945,7 +3113,7 @@ public class MainActivity extends Activity {
     // ================================================================ Bildschirmschoner (Punkt 1)
 
     private final Runnable showSaver = () -> {
-        if (menuLayer.getVisibility() == View.VISIBLE || movingPkg != null) { resetIdle(); return; }
+        if (menuLayer.getVisibility() == View.VISIBLE || movingPkg != null || ambientLayer != null) { resetIdle(); return; }
         saver.setAlpha(0f);
         saver.setVisibility(View.VISIBLE);
         sWeather.setText(wLine);
