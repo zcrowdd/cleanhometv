@@ -202,6 +202,8 @@ public class MainActivity extends Activity {
         loadGovee();
         inst = new java.lang.ref.WeakReference<>(this);
         setContentView(buildUi());
+        // Fokus wandert z. B. zu Einstellungen oder ins Menue -> Licht neu berechnen (nicht die alte App-Farbe behalten)
+        root.getViewTreeObserver().addOnGlobalFocusChangeListener((o, n) -> { if (homeVisible) scheduleLights(250); });
         root.post(() -> {                     // Hintergrundbild deckt alles -> zwei Vollbild-Fuellungen pro Frame sparen
             root.setBackground(null);
             getWindow().setBackgroundDrawable(null);
@@ -1960,9 +1962,9 @@ public class MainActivity extends Activity {
             android.media.session.MediaController music = null;
             for (android.media.session.MediaController c : watched)
                 if (stateOf(c) == P && appKind(c.getPackageName()) != K_VIDEO && c.getMetadata() != null) { music = c; break; }
-            t = music != null && npCtrl == music
-                    ? new int[]{0, npColor, 70}                       // Musik laeuft -> Cover-Farbe
-                    : new int[]{0, lastAppColor, 70};                 // sonst Farbe der markierten Kachel
+            if (music != null && npCtrl == music) t = new int[]{0, npColor, 70};      // Musik laeuft -> Cover-Farbe
+            else if (!appTileFocused()) t = new int[]{1, 4000, 55};                     // Einstellungen, Menue, Leiste -> neutrales Weiss
+            else t = new int[]{0, lastAppColor, 70};                                    // Farbe der markierten Kachel
         } else {
             android.media.session.MediaController video = null, music = null;
             int videoState = 0;
@@ -2289,6 +2291,13 @@ public class MainActivity extends Activity {
 
     // ---- kleine Helfer, die die restliche App aufruft
     private void wizOnFocusColor(int color) { lastAppColor = color; scheduleLights(250); }
+
+    /** Ist gerade eine App-Kachel markiert? (Kacheln tragen den Tag "reihe|paket") */
+    private boolean appTileFocused() {
+        if (menuLayer != null && menuLayer.getVisibility() == View.VISIBLE) return false;
+        View f = getCurrentFocus();
+        return f != null && f.getTag() instanceof String && ((String) f.getTag()).contains("|");
+    }
     private void wizOnCover(int color) { scheduleLights(150); }
     private void wizHome() { homeVisible = true; scheduleLights(50); }
     private void wizLaunch() {
