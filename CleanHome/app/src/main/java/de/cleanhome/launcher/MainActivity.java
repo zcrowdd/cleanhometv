@@ -3398,6 +3398,30 @@ public class MainActivity extends Activity {
         return Color.HSVToColor(new float[]{h, sat, val});
     }
 
+    private void applySaverAccent(int c) {
+        if (saverClock != null) saverClock.setAccent(c);
+        if (saverDust != null) saverDust.setAccent(c);
+        if (saverGlow != null) saverGlow.setColors(new int[]{0x38000000 | (c & 0xFFFFFF), 0x00000000});
+    }
+
+    /** Begruessung je nach Uhrzeit + was gerade laeuft. */
+    private void updateSaverInfo() {
+        if (saverHello == null) return;
+        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+        String g = h < 5 ? "GUTE NACHT" : h < 11 ? "GUTEN MORGEN" : h < 17 ? "GUTEN TAG" : h < 22 ? "GUTEN ABEND" : "GUTE NACHT";
+        saverHello.setText(g + "  ·  BECKINGEN");
+        if (wLine != null && !wLine.isEmpty()) sWeather.setText(wLine);
+        android.media.session.MediaController c = npCtrl;
+        String line = null;
+        if (c != null && c.getMetadata() != null && stateOf(c) == android.media.session.PlaybackState.STATE_PLAYING) {
+            String t = c.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_TITLE);
+            String a = c.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_ARTIST);
+            if (t != null) line = "♫  " + t + (a != null && !a.isEmpty() ? "  —  " + a : "");
+        }
+        saverMusic.setVisibility(line != null ? View.VISIBLE : View.GONE);
+        if (line != null) saverMusic.setText(line);
+    }
+
     // ---- Gemeinsamer Takt des Ruhebildschirms: EIN Bild pro Takt fuer Ecken, Inhalt, Lichtpunkte und Uhr
     // (vorher liefen mehrere Animationen unabhaengig mit 60 Bildern/s -> Grafik dauerhaft ausgelastet).
     private static final long SAVER_FRAME_MS = 40;            // 25 Bilder/s reichen fuer langsame Bewegungen
