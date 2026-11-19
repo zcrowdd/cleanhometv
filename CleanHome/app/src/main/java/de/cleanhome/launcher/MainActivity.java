@@ -2202,6 +2202,47 @@ public class MainActivity extends Activity {
 
     private static final String[] AMBIENT_FILES = {"kamin.mp4", "regen.mp4", "sterne.mp4"};
     private static final String[] AMBIENT_NAMES = {"Kaminfeuer", "Regen am Fenster", "Sternenhimmel"};
+    // Eingebaute Szenen-Videos (Pexels, kostenlos nutzbar, Full HD). Neue Videos = neue Adresse + neue Version,
+    // dann laedt der Stick sie beim naechsten Oeffnen selbst nach.
+    private static final String[] AMBIENT_URLS = {
+            "https://videos.pexels.com/video-files/946600/946600-hd_1920_1080_30fps.mp4",
+            "https://videos.pexels.com/video-files/13292544/13292544-hd_1920_1080_24fps.mp4",
+            "https://videos.pexels.com/video-files/10719866/10719866-hd_1920_1080_25fps.mp4"};
+    private volatile boolean ambientLoading;
+
+    /** Video fehlt oder ist veraltet -> direkt am Stick herunterladen, danach abspielen. */
+    private void downloadAmbient(int type, java.io.File f) {
+        if (ambientLoading) { toast("Video wird schon geladen …"); return; }
+        ambientLoading = true;
+        toast(AMBIENT_NAMES[type] + " wird geladen …");
+        new Thread(() -> {
+            boolean ok = false;
+            java.io.File tmp = new java.io.File(f.getParentFile(), f.getName() + ".part");
+            try {
+                java.net.HttpURLConnection h = (java.net.HttpURLConnection) new java.net.URL(AMBIENT_URLS[type]).openConnection();
+                h.setConnectTimeout(10000); h.setReadTimeout(20000);
+                h.setRequestProperty("User-Agent", "Mozilla/5.0 (CleanHome)");
+                h.setInstanceFollowRedirects(true);
+                int len = h.getContentLength();
+                try (java.io.InputStream in = h.getInputStream(); java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+                    byte[] b = new byte[128 * 1024]; long done = 0; int r, last = -1;
+                    while ((r = in.read(b)) > 0) {
+                        out.write(b, 0, r); done += r;
+                        if (len > 0) { int pc = (int) (done * 100 / len); if (pc / 20 != last) { last = pc / 20; final int fp = pc; ui.post(() -> toast(AMBIENT_NAMES[type] + " · " + fp + " %")); } }
+                    }
+                }
+                ok = tmp.length() > 1_000_000 && (len <= 0 || tmp.length() == len) && tmp.renameTo(f);
+                if (ok) getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("ambient_url_" + type, AMBIENT_URLS[type]).apply();
+            } catch (Exception ignored) { }
+            if (!ok) tmp.delete();
+            final boolean done = ok;
+            ui.post(() -> {
+                ambientLoading = false;
+                if (done) { if (isFront && homeVisible) openAmbient(type); }
+                else toast("Video konnte nicht geladen werden – Internet prüfen");
+            });
+        }, "ambientDownload").start();
+    }
     private android.widget.VideoView ambientVideo;
 
     /** Spielt ein echtes Video (vom PC mit stimmung.ps1 aufgespielt) bildschirmfuellend in Endlosschleife. */
@@ -2211,10 +2252,10 @@ public class MainActivity extends Activity {
         if (ambientLayer != null) closeAmbient();
         java.io.File dir = getExternalFilesDir("ambient");
         java.io.File f = dir != null ? new java.io.File(dir, AMBIENT_FILES[type]) : null;
-        if (f == null || !f.exists() || f.length() < 50_000) {
-            toast("Video fehlt – „" + AMBIENT_FILES[type] + "“ in den Ordner „stimmung“ legen und stimmung.ps1 starten");
-            return;
-        }
+        if (f == null) { toast("Kein Speicher verfügbar"); return; }
+        String knownUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString("ambient_url_" + type, null);
+        boolean stale = knownUrl != null && !knownUrl.equals(AMBIENT_URLS[type]);    // App-Update brachte ein neues Video
+        if (!f.exists() || f.length() < 1_000_000 || stale) { downloadAmbient(type, f); return; }
         ambientType = type;
         FrameLayout l = new FrameLayout(this);
         l.setBackgroundColor(BLACK);
