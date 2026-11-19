@@ -2246,7 +2246,49 @@ public class MainActivity extends Activity {
             });
         }, "ambientDownload").start();
     }
-    private android.widget.VideoView ambientVideo;
+    private android.view.TextureView ambientTexture;
+    private android.media.MediaPlayer ambientPlayer;
+    private Bitmap vlBitmap;
+    private float vlR, vlG, vlB, vlDim;
+    private String vlSent;
+
+    /** Bild des Videos klein auslesen -> Lichtfarbe. Helle Pixel zaehlen viel mehr als dunkle (Flamme statt Schwarz). */
+    private final Runnable videoLights = new Runnable() {
+        @Override public void run() {
+            if (ambientLayer == null || ambientTexture == null) return;
+            try {
+                if (vlBitmap == null) vlBitmap = Bitmap.createBitmap(48, 27, Bitmap.Config.ARGB_8888);
+                Bitmap b = ambientTexture.getBitmap(vlBitmap);
+                if (b != null) {
+                    double sr = 0, sg = 0, sb = 0, sw = 0; int maxL = 0;
+                    for (int y = 0; y < 27; y++) for (int x = 0; x < 48; x++) {
+                        int c = b.getPixel(x, y);
+                        int r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
+                        int lum = (r * 3 + g * 6 + bl) / 10;
+                        if (lum > maxL) maxL = lum;
+                        double w = (double) lum * lum * lum;          // helle Stellen dominieren
+                        sr += r * w; sg += g * w; sb += bl * w; sw += w;
+                    }
+                    if (sw > 0) {
+                        float r = (float) (sr / sw), g = (float) (sg / sw), bl = (float) (sb / sw);
+                        float mx = Math.max(r, Math.max(g, bl));
+                        if (mx > 0) { r = r * 255f / mx; g = g * 255f / mx; bl = bl * 255f / mx; }   // volle Farbe, Helligkeit separat
+                        float dim = 10 + 90 * (float) Math.pow(maxL / 255.0, 1.4);
+                        float a = ambientType == 0 ? 0.65f : 0.4f;    // Feuer schnell, Rest ruhiger
+                        vlR += (r - vlR) * a; vlG += (g - vlG) * a; vlB += (bl - vlB) * a;
+                        // Blitze sofort durchlassen, sonst weich
+                        vlDim = dim > vlDim + 35 ? dim : vlDim + (dim - vlDim) * a;
+                        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
+                        int d = Math.round(vlDim * ((h >= 23 || h < 6) ? 0.6f : 1f));
+                        String j = "{\"state\":true,\"r\":" + Math.round(vlR) + ",\"g\":" + Math.round(vlG)
+                                + ",\"b\":" + Math.round(vlB) + ",\"dimming\":" + Math.max(10, Math.min(100, d)) + "}";
+                        if (!j.equals(vlSent) && wizOn && lightManual == null) { vlSent = j; wiz.restore(j); }
+                    }
+                }
+            } catch (Exception ignored) { }
+            ui.postDelayed(this, ambientType == 0 ? 180 : 300);
+        }
+    };
 
     /** Spielt ein echtes Video (vom PC mit stimmung.ps1 aufgespielt) bildschirmfuellend in Endlosschleife. */
     private void openAmbient(int type) {
@@ -2264,7 +2306,7 @@ public class MainActivity extends Activity {
         FrameLayout l = new FrameLayout(this);
         l.setBackgroundColor(BLACK);
         l.setClickable(true);
-        android.widget.VideoView vv = new android.widget.VideoView(this);
+        final android.view.TextureView vv = new android.view.TextureView(this);
         l.addView(vv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
         View cover = new View(this);                       // schwarz, bis das erste Bild da ist (kein Flackern)
         cover.setBackgroundColor(BLACK);
@@ -2277,19 +2319,33 @@ public class MainActivity extends Activity {
         l.addView(hint, hl);
         root.addView(l, new FrameLayout.LayoutParams(-1, -1));
         ambientLayer = l;
-        ambientVideo = vv;
-        vv.setOnPreparedListener(mp -> {
-            mp.setLooping(true);
-            vv.start();
-            cover.animate().alpha(0f).setStartDelay(250).setDuration(1500).start();
-            hint.animate().alpha(0f).setStartDelay(4000).setDuration(1500).start();
+        ambientTexture = vv;
+        final String path = f.getAbsolutePath();
+        vv.setSurfaceTextureListener(new android.view.TextureView.SurfaceTextureListener() {
+            @Override public void onSurfaceTextureAvailable(android.graphics.SurfaceTexture st, int w, int h) {
+                try {
+                    android.media.MediaPlayer mp = new android.media.MediaPlayer();
+                    ambientPlayer = mp;
+                    mp.setDataSource(path);
+                    mp.setSurface(new android.view.Surface(st));
+                    mp.setLooping(true);
+                    mp.setOnPreparedListener(m -> {
+                        m.start();
+                        cover.animate().alpha(0f).setStartDelay(250).setDuration(1500).start();
+                        hint.animate().alpha(0f).setStartDelay(4000).setDuration(1500).start();
+                    });
+                    mp.setOnErrorListener((m, what, extra) -> {
+                        toast("Das Video lässt sich nicht abspielen");
+                        closeAmbient();
+                        return true;
+                    });
+                    mp.prepareAsync();
+                } catch (Exception e) { toast("Das Video lässt sich nicht abspielen"); closeAmbient(); }
+            }
+            @Override public void onSurfaceTextureSizeChanged(android.graphics.SurfaceTexture st, int w, int h) { }
+            @Override public boolean onSurfaceTextureDestroyed(android.graphics.SurfaceTexture st) { return true; }
+            @Override public void onSurfaceTextureUpdated(android.graphics.SurfaceTexture st) { }
         });
-        vv.setOnErrorListener((mp, what, extra) -> {
-            toast("Das Video lässt sich nicht abspielen – bitte als MP4 (H.264, Full HD) speichern");
-            closeAmbient();
-            return true;
-        });
-        vv.setVideoPath(f.getAbsolutePath());
         ui.postDelayed(() -> {                              // darunter liegende Ebenen nicht mehr mitzeichnen
             if (ambientLayer != l) return;
             eqVisibilityCheck();
@@ -2299,15 +2355,16 @@ public class MainActivity extends Activity {
                 if (v.getVisibility() == View.VISIBLE) { v.setVisibility(View.INVISIBLE); hiddenUnderAmbient.add(v); }
             }
         }, 600);
-        // Licht: die Sync Box reagiert auf das echte Video (wie bei Filmen) - Govee bleibt unberuehrt
+        // Licht: CleanHome liest das laufende Video selbst aus (die Sync Box sieht an den dunklen Bildraendern
+        // nur Schwarz) - helle Bildteile wie Flammen, Blitze oder Polarlicht geben Farbe und Helligkeit vor.
         if (wizOn && wiz.hasLamps() && lightManual == null) {
-            lightKey = EXT;
+            lightKey = "video";
             ui.removeCallbacks(resendLights);
-            wiz.cancel();
-            String sync = getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_sync", SYNC_DEFAULT);
-            wiz.restore(sync);
             ui.removeCallbacks(resendSync);
-            ui.postDelayed(resendSync, 1500);
+            wiz.cancel();
+            vlR = vlG = vlB = 0; vlDim = 10; vlSent = null;
+            ui.removeCallbacks(videoLights);
+            ui.postDelayed(videoLights, 800);
         }
         ui.removeCallbacks(showSaver);
     }
@@ -2320,14 +2377,17 @@ public class MainActivity extends Activity {
         for (View v : hiddenUnderAmbient) v.setVisibility(View.VISIBLE);
         hiddenUnderAmbient.clear();
         ui.post(this::eqVisibilityCheck);
-        final android.widget.VideoView vv = ambientVideo;
-        ambientVideo = null;
+        ui.removeCallbacks(videoLights);
+        final android.media.MediaPlayer mp = ambientPlayer;
+        ambientPlayer = null;
+        ambientTexture = null;
         l.animate().alpha(0f).setDuration(400).withEndAction(() -> {
-            try { if (vv != null) vv.stopPlayback(); } catch (Exception ignored) { }
+            try { if (mp != null) { mp.stop(); mp.release(); } } catch (Exception ignored) { }
             root.removeView(l);
         }).start();
         ui.removeCallbacks(resendSync);
-        captureExternalThen(() -> { lightKey = null; scheduleLights(0); });   // Sync-Einstellung merken, dann CleanHome-Licht
+        lightKey = null;
+        scheduleLights(0);
         resetIdle();
         focusFirst();
     }
