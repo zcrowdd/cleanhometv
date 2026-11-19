@@ -3249,8 +3249,15 @@ public class MainActivity extends Activity {
         saver.setVisibility(View.VISIBLE);
         sWeather.setText(wLine);
         updateSaverInfo();
+        saverClock.external = true;
+        saverDust.external = true;
+        saverDust.setAlpha(1f);
+        saverDeep = false;
+        saverShownAt = android.os.SystemClock.uptimeMillis();
         saverClock.start();
         saverDust.start();
+        ui.removeCallbacks(saverFrame);
+        ui.post(saverFrame);
         // Aufwachen: Inhalt gleitet sanft hoch und wird schaerfer
         saverContent.setAlpha(0f);
         saverContent.setScaleX(0.96f); saverContent.setScaleY(0.96f);
@@ -3292,8 +3299,9 @@ public class MainActivity extends Activity {
             int maxY = Math.max(0, (saver.getHeight() - ch) / 2 - dp(40));
             float x = maxX == 0 ? 0 : rnd.nextInt(maxX * 2) - maxX;
             float y = maxY == 0 ? 0 : rnd.nextInt(maxY * 2) - maxY;
-            saverContent.animate().translationX(x).translationY(y).setDuration(4000)
-                    .setInterpolator(new AccelerateDecelerateInterpolator()).start();
+            driftFrom[0] = saverContent.getTranslationX(); driftFrom[1] = saverContent.getTranslationY();
+            driftTo[0] = x; driftTo[1] = y;
+            driftStart = android.os.SystemClock.uptimeMillis();
             ui.postDelayed(this, SAVER_DRIFT_MS);
         }
     };
@@ -3312,6 +3320,7 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(cornerTick);
         if (saverClock != null) saverClock.stop();
         if (saverDust != null) saverDust.stop();
+        ui.removeCallbacks(saverFrame);
         saver.animate().alpha(0f).setDuration(250).withEndAction(() -> saver.setVisibility(View.GONE)).start();
         wizSaver(false);
         resetIdle();
@@ -3394,6 +3403,48 @@ public class MainActivity extends Activity {
         if (line != null) saverMusic.setText(line);
     }
 
+    // ---- Gemeinsamer Takt des Ruhebildschirms: EIN Bild pro Takt fuer Ecken, Inhalt, Lichtpunkte und Uhr
+    // (vorher liefen mehrere Animationen unabhaengig mit 60 Bildern/s -> Grafik dauerhaft ausgelastet).
+    private static final long SAVER_FRAME_MS = 40;            // 25 Bilder/s reichen fuer langsame Bewegungen
+    private static final long SAVER_DEEP_AFTER = 20 * 60 * 1000L;   // nach 20 Min ohne Taste: Stromsparen
+    private final long[] fadeStart = new long[4], moveStart = new long[4];
+    private final float[][] moveFrom = new float[4][2], moveTo = new float[4][2];
+    private final float[] driftFrom = new float[2], driftTo = new float[2];
+    private long driftStart, saverShownAt;
+    private boolean saverDeep;
+
+    private static float ease(float t) { t = Math.max(0f, Math.min(1f, t)); return t * t * (3f - 2f * t); }
+
+    private final Runnable saverFrame = new Runnable() {
+        @Override public void run() {
+            if (saver == null || saver.getVisibility() != View.VISIBLE) return;
+            long now = android.os.SystemClock.uptimeMillis();
+            boolean deep = now - saverShownAt > SAVER_DEEP_AFTER;
+            if (deep != saverDeep) {
+                saverDeep = deep;
+                if (deep && saverDust != null) saverDust.animate().alpha(0f).setDuration(3000).start();   // Lichtpunkte aus
+            }
+            for (int c = 0; c < 4; c++) {
+                if (cornerHolders[c] == null) continue;
+                float fa = ease((now - fadeStart[c]) / 6000f);
+                cornerViews[c][cornerFront[c]].setAlpha(fa);
+                cornerViews[c][1 - cornerFront[c]].setAlpha(1f - fa);
+                if (!deep) {
+                    float m = ease((now - moveStart[c]) / (float) CORNER_STEP_MS);
+                    cornerHolders[c].setTranslationX(moveFrom[c][0] + (moveTo[c][0] - moveFrom[c][0]) * m);
+                    cornerHolders[c].setTranslationY(moveFrom[c][1] + (moveTo[c][1] - moveFrom[c][1]) * m);
+                }
+            }
+            float d = ease((now - driftStart) / 4000f);
+            saverContent.setTranslationX(driftFrom[0] + (driftTo[0] - driftFrom[0]) * d);
+            saverContent.setTranslationY(driftFrom[1] + (driftTo[1] - driftFrom[1]) * d);
+            if (!deep && saverDust != null) saverDust.invalidate();
+            if (saverClock != null) saverClock.frame();
+            // im Stromsparen nur noch 4 Bilder/s (Farbwechsel bleiben weich, Uhr und Sekunden laufen weiter)
+            ui.postDelayed(this, deep ? 250 : SAVER_FRAME_MS);
+        }
+    };
+
     private final Runnable cornerTick = new Runnable() {
         @Override public void run() {
             if (saver == null || saver.getVisibility() != View.VISIBLE) return;
@@ -3406,17 +3457,17 @@ public class MainActivity extends Activity {
                 int back = 1 - cornerFront[c];
                 View nb = cornerViews[c][back], of = cornerViews[c][cornerFront[c]];
                 nb.setBackground(cornerDrawable(col, size));
-                nb.animate().alpha(1f).setDuration(6000).start();
-                of.animate().alpha(0f).setDuration(6000).start();
                 cornerFront[c] = back;
-                float dx = (rnd.nextFloat() * 2 - 1) * dp(70), dy = (rnd.nextFloat() * 2 - 1) * dp(50);
-                cornerHolders[c].animate().translationX(dx).translationY(dy)
-                        .setDuration(CORNER_STEP_MS).setInterpolator(new AccelerateDecelerateInterpolator()).start();
+                long now = android.os.SystemClock.uptimeMillis();
+                fadeStart[c] = now;
+                moveFrom[c][0] = cornerHolders[c].getTranslationX(); moveFrom[c][1] = cornerHolders[c].getTranslationY();
+                moveTo[c][0] = (rnd.nextFloat() * 2 - 1) * dp(70); moveTo[c][1] = (rnd.nextFloat() * 2 - 1) * dp(50);
+                moveStart[c] = now;
             }
-            sendSaverLights();
+            if (!saverDeep || cornerStep % 6 == 0) sendSaverLights();     // Stromsparen: Licht nur jede Minute
             applySaverAccent(cornerCols[0]);
             updateSaverInfo();
-            ui.postDelayed(this, CORNER_STEP_MS);
+            ui.postDelayed(this, saverDeep ? CORNER_STEP_MS * 3 : CORNER_STEP_MS);
         }
     };
 

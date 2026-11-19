@@ -29,6 +29,8 @@ public class SaverClock extends View {
     private long changedAt;
     private int accent = 0xFF0A72EF;
     private boolean running;
+    /** true = ein gemeinsamer Takt des Ruhebildschirms ruft tick() auf (spart Strom: ein Bild statt mehrerer). */
+    public boolean external;
     private float cellW, colonW, textH, ascent;
     private static final long ROLL_MS = 700;
     private final Calendar cal = Calendar.getInstance();
@@ -72,6 +74,8 @@ public class SaverClock extends View {
     }
 
     public void start() { removeCallbacks(tickRunnable); running = true; tick(); }
+    /** Fuer den gemeinsamen Takt: ein Bild weiterschalten. */
+    public void frame() { if (running) tick(); }
     public void stop() { running = false; removeCallbacks(tickRunnable); }
 
     private String now() {
@@ -93,7 +97,7 @@ public class SaverClock extends View {
         invalidate();
         // waehrend der Roll-Animation fluessig, sonst nur fuer Doppelpunkt und Sekunden-Balken
         long roll = SystemClock.uptimeMillis() - changedAt;
-        postDelayed(tickRunnable, roll < ROLL_MS ? 16 : 50);
+        if (!external) postDelayed(tickRunnable, roll < ROLL_MS ? 16 : 50);
     }
 
     @Override

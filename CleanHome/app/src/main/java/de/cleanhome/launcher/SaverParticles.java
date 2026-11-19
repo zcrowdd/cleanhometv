@@ -15,6 +15,7 @@ public class SaverParticles extends View {
     private final Random rnd = new Random();
     private final long frameMs;
     private boolean running;
+    public boolean external;          // gemeinsamer Takt statt eigener Schleife
     private int accent = 0xFF0A72EF;
     private long last;
 
@@ -54,6 +55,6 @@ public class SaverParticles extends View {
             p.setColor((base & 0x00FFFFFF) | ((int) (tw * 150) << 24));
             c.drawCircle(x[i] * w, y[i] * h, r[i], p);
         }
-        if (running) postInvalidateDelayed(frameMs);
+        if (running && !external) postInvalidateDelayed(frameMs);
     }
 }
