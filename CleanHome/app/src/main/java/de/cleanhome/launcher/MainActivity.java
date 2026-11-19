@@ -1430,8 +1430,9 @@ public class MainActivity extends Activity {
         items.add(new MItem("⬆  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
         items.add(new MItem("STIMMUNG", null));
         items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(0)));
-        items.add(new MItem("🌧  Regen am Fenster", () -> openAmbient(1)));
+        items.add(new MItem("⛈  Gewitter am Fenster", () -> openAmbient(1)));
         items.add(new MItem("✦  Sternenhimmel", () -> openAmbient(2)));
+        items.add(new MItem("🌌  Nordlicht", () -> openAmbient(3)));
         items.add(new MItem("SPEICHER", null));
         items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
         items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
@@ -2200,14 +2201,16 @@ public class MainActivity extends Activity {
     private long lightFlashUntil;
     private final List<View> hiddenUnderAmbient = new ArrayList<>();
 
-    private static final String[] AMBIENT_FILES = {"kamin.mp4", "regen.mp4", "sterne.mp4"};
-    private static final String[] AMBIENT_NAMES = {"Kaminfeuer", "Regen am Fenster", "Sternenhimmel"};
+    private static final String[] AMBIENT_FILES = {"kamin.mp4", "regen.mp4", "sterne.mp4", "nordlicht.mp4"};
+    private static final String[] AMBIENT_NAMES = {"Kaminfeuer", "Gewitter am Fenster", "Sternenhimmel", "Nordlicht"};
     // Eingebaute Szenen-Videos (Pexels, kostenlos nutzbar, Full HD). Neue Videos = neue Adresse + neue Version,
     // dann laedt der Stick sie beim naechsten Oeffnen selbst nach.
     private static final String[] AMBIENT_URLS = {
-            "https://videos.pexels.com/video-files/946600/946600-hd_1920_1080_30fps.mp4",
-            "https://videos.pexels.com/video-files/13292544/13292544-hd_1920_1080_24fps.mp4",
-            "https://videos.pexels.com/video-files/10719866/10719866-hd_1920_1080_25fps.mp4"};
+            // cinematisch: dunkle Flammen vor Schwarz, Regen mit Blitzen, Sternen-Zeitraffer, Polarlicht
+            "https://videos.pexels.com/video-files/30796586/13171921_1920_1080_25fps.mp4",
+            "https://videos.pexels.com/video-files/5930874/5930874-hd_1920_1080_24fps.mp4",
+            "https://videos.pexels.com/video-files/10719866/10719866-hd_1920_1080_25fps.mp4",
+            "https://videos.pexels.com/video-files/3222269/3222269-hd_1920_1080_24fps.mp4"};
     private volatile boolean ambientLoading;
 
     /** Video fehlt oder ist veraltet -> direkt am Stick herunterladen, danach abspielen. */
@@ -2254,7 +2257,8 @@ public class MainActivity extends Activity {
         java.io.File f = dir != null ? new java.io.File(dir, AMBIENT_FILES[type]) : null;
         if (f == null) { toast("Kein Speicher verfügbar"); return; }
         String knownUrl = getSharedPreferences(PREFS, MODE_PRIVATE).getString("ambient_url_" + type, null);
-        boolean stale = knownUrl != null && !knownUrl.equals(AMBIENT_URLS[type]);    // App-Update brachte ein neues Video
+        // App-Update brachte ein neues Video (unbekannte Herkunft = altes, vom PC aufgespieltes Video -> erneuern)
+        boolean stale = knownUrl == null || !knownUrl.equals(AMBIENT_URLS[type]);
         if (!f.exists() || f.length() < 1_000_000 || stale) { downloadAmbient(type, f); return; }
         ambientType = type;
         FrameLayout l = new FrameLayout(this);
