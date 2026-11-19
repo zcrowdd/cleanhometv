@@ -3256,8 +3256,8 @@ public class MainActivity extends Activity {
         saverShownAt = android.os.SystemClock.uptimeMillis();
         saverClock.start();
         saverDust.start();
-        ui.removeCallbacks(saverFrame);
-        ui.post(saverFrame);
+        ui.removeCallbacks(this.saverFrame);
+        ui.post(this.saverFrame);
         // Aufwachen: Inhalt gleitet sanft hoch und wird schaerfer
         saverContent.setAlpha(0f);
         saverContent.setScaleX(0.96f); saverContent.setScaleY(0.96f);
