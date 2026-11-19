@@ -1387,9 +1387,9 @@ public class MainActivity extends Activity {
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
         items.add(new MItem("STIMMUNG", null));
-        items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(AmbientScene.FIRE)));
-        items.add(new MItem("🌧  Regen am Fenster", () -> openAmbient(AmbientScene.RAIN)));
-        items.add(new MItem("✦  Sternenhimmel", () -> openAmbient(AmbientScene.STARS)));
+        items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(0)));
+        items.add(new MItem("🌧  Regen am Fenster", () -> openAmbient(1)));
+        items.add(new MItem("✦  Sternenhimmel", () -> openAmbient(2)));
         items.add(new MItem("SPEICHER", null));
         items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
         items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
@@ -2086,43 +2086,73 @@ public class MainActivity extends Activity {
     // ================================================================ Stimmungs-Szenen
 
     private FrameLayout ambientLayer;
-    private AmbientScene ambientScene;
     private int ambientType = -1;
     private long lightFlashUntil;
     private final List<View> hiddenUnderAmbient = new ArrayList<>();
 
+    private static final String[] AMBIENT_FILES = {"kamin.mp4", "regen.mp4", "sterne.mp4"};
+    private static final String[] AMBIENT_NAMES = {"Kaminfeuer", "Regen am Fenster", "Sternenhimmel"};
+    private android.widget.VideoView ambientVideo;
+
+    /** Spielt ein echtes Video (vom PC mit stimmung.ps1 aufgespielt) bildschirmfuellend in Endlosschleife. */
     private void openAmbient(int type) {
         hideMenu();
         hideSaver();
         if (ambientLayer != null) closeAmbient();
+        java.io.File dir = getExternalFilesDir("ambient");
+        java.io.File f = dir != null ? new java.io.File(dir, AMBIENT_FILES[type]) : null;
+        if (f == null || !f.exists() || f.length() < 50_000) {
+            toast("Video fehlt – „" + AMBIENT_FILES[type] + "“ in den Ordner „stimmung“ legen und stimmung.ps1 starten");
+            return;
+        }
         ambientType = type;
         FrameLayout l = new FrameLayout(this);
+        l.setBackgroundColor(BLACK);
         l.setClickable(true);
-        AmbientScene sc = new AmbientScene(this, type, LITE);
-        sc.setEvents(kind -> ui.post(() -> ambientFlash(kind)));
-        l.addView(sc, new FrameLayout.LayoutParams(-1, -1));
-        TextView hint = tv(13, 0x66FFFFFF, fMono);
-        hint.setText("BELIEBIGE TASTE = ZURÜCK");
+        android.widget.VideoView vv = new android.widget.VideoView(this);
+        l.addView(vv, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER));
+        View cover = new View(this);                       // schwarz, bis das erste Bild da ist (kein Flackern)
+        cover.setBackgroundColor(BLACK);
+        l.addView(cover, new FrameLayout.LayoutParams(-1, -1));
+        TextView hint = tv(13, 0x88FFFFFF, fMono);
+        hint.setText(AMBIENT_NAMES[type].toUpperCase(Locale.GERMANY) + "  ·  BELIEBIGE TASTE = ZURÜCK");
         hint.setLetterSpacing(0.25f);
         FrameLayout.LayoutParams hl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         hl.bottomMargin = dp(28);
         l.addView(hint, hl);
-        hint.animate().alpha(0f).setStartDelay(3500).setDuration(1500).start();
-        l.setAlpha(0f);
         root.addView(l, new FrameLayout.LayoutParams(-1, -1));
         ambientLayer = l;
-        ambientScene = sc;
-        sc.start();
-        l.animate().alpha(1f).setDuration(1200).withEndAction(() -> {
+        ambientVideo = vv;
+        vv.setOnPreparedListener(mp -> {
+            mp.setLooping(true);
+            vv.start();
+            cover.animate().alpha(0f).setStartDelay(250).setDuration(1500).start();
+            hint.animate().alpha(0f).setStartDelay(4000).setDuration(1500).start();
+        });
+        vv.setOnErrorListener((mp, what, extra) -> {
+            toast("Das Video lässt sich nicht abspielen – bitte als MP4 (H.264, Full HD) speichern");
+            closeAmbient();
+            return true;
+        });
+        vv.setVideoPath(f.getAbsolutePath());
+        ui.postDelayed(() -> {                              // darunter liegende Ebenen nicht mehr mitzeichnen
             if (ambientLayer != l) return;
-            int idx = root.indexOfChild(l);          // darunter liegende Ebenen nicht mehr mitzeichnen
-            for (int i = 0; i < idx; i++) {
-                View v = root.getChildAt(i);
+            int idx = root.indexOfChild(l);
+            for (int k = 0; k < idx; k++) {
+                View v = root.getChildAt(k);
                 if (v.getVisibility() == View.VISIBLE) { v.setVisibility(View.INVISIBLE); hiddenUnderAmbient.add(v); }
             }
-        }).start();
-        ui.removeCallbacks(ambientLights);
-        ui.post(ambientLights);
+        }, 600);
+        // Licht: die Sync Box reagiert auf das echte Video (wie bei Filmen) - Govee bleibt unberuehrt
+        if (wizOn && wiz.hasLamps() && lightManual == null) {
+            lightKey = EXT;
+            ui.removeCallbacks(resendLights);
+            wiz.cancel();
+            String sync = getSharedPreferences(PREFS, MODE_PRIVATE).getString("wiz_sync", SYNC_DEFAULT);
+            wiz.restore(sync);
+            ui.removeCallbacks(resendSync);
+            ui.postDelayed(resendSync, 1500);
+        }
         ui.removeCallbacks(showSaver);
     }
 
@@ -2133,47 +2163,16 @@ public class MainActivity extends Activity {
         ambientType = -1;
         for (View v : hiddenUnderAmbient) v.setVisibility(View.VISIBLE);
         hiddenUnderAmbient.clear();
-        ui.removeCallbacks(ambientLights);
+        final android.widget.VideoView vv = ambientVideo;
+        ambientVideo = null;
         l.animate().alpha(0f).setDuration(400).withEndAction(() -> {
-            if (ambientScene != null) ambientScene.stop();
+            try { if (vv != null) vv.stopPlayback(); } catch (Exception ignored) { }
             root.removeView(l);
         }).start();
-        lightKey = null;
-        scheduleLights(0);
+        ui.removeCallbacks(resendSync);
+        captureExternalThen(() -> { lightKey = null; scheduleLights(0); });   // Sync-Einstellung merken, dann CleanHome-Licht
         resetIdle();
         focusFirst();
-    }
-
-    /** Licht passend zur Szene: Kamin flackert orange, Regen kuehl blau, Sterne tiefblau/violett. Govee bleibt unberuehrt. */
-    private final Runnable ambientLights = new Runnable() {
-        @Override public void run() {
-            if (ambientLayer == null) return;
-            long next = 1500;
-            if (wizOn && wiz.hasLamps() && lightManual == null && android.os.SystemClock.uptimeMillis() > lightFlashUntil) {
-                lightKey = "ambient";
-                int r, g, b, dim;
-                if (ambientType == AmbientScene.FIRE) {
-                    r = 255; g = 70 + rnd.nextInt(70); b = rnd.nextInt(14); dim = 30 + rnd.nextInt(40);
-                    next = 220 + rnd.nextInt(260);                      // unruhig wie echtes Feuer
-                } else if (ambientType == AmbientScene.RAIN) {
-                    r = 20 + rnd.nextInt(15); g = 60 + rnd.nextInt(25); b = 200 + rnd.nextInt(55); dim = 18 + rnd.nextInt(10);
-                    next = 2500;
-                } else {
-                    boolean violet = rnd.nextBoolean();
-                    r = violet ? 70 : 20; g = violet ? 30 : 40; b = 200 + rnd.nextInt(55); dim = 12 + rnd.nextInt(8);
-                    next = 3500;
-                }
-                wiz.restore("{\"state\":true,\"r\":" + r + ",\"g\":" + g + ",\"b\":" + b + ",\"dimming\":" + dim + "}");
-            }
-            ui.postDelayed(this, next);
-        }
-    };
-
-    /** Blitz beim Gewitter bzw. kurzes Aufleuchten bei einer Sternschnuppe. */
-    private void ambientFlash(int kind) {
-        if (ambientLayer == null || !wizOn || !wiz.hasLamps() || lightManual != null) return;
-        lightFlashUntil = android.os.SystemClock.uptimeMillis() + 900;
-        wiz.restore("{\"state\":true,\"temp\":6500,\"dimming\":" + (kind == AmbientScene.RAIN ? 100 : 45) + "}");
     }
 
     // ================================================================ Controller erkennen
@@ -2234,7 +2233,7 @@ public class MainActivity extends Activity {
     }
 
     private void applyLightsNow() {
-        if (ambientLayer != null || android.os.SystemClock.uptimeMillis() < lightFlashUntil) return;   // Szene / Aufleuchten
+        if (ambientLayer != null || android.os.SystemClock.uptimeMillis() < lightFlashUntil) return;   // Video-Szene (Sync Box) / Aufleuchten
         if (lightManual != null) {
             if (lightManual.equals(lightManualSent)) return;
             lightManualSent = lightManual;
