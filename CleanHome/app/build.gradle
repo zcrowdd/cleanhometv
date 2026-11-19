@@ -26,9 +26,24 @@ android {
         }
     }
 
+    // Die ausgelieferte APK (Build-Typ "debug", damit Dateiname und Selbst-Update gleich bleiben)
+    // ist trotzdem eine optimierte Release-Version: nicht debugbar -> ART kompiliert und optimiert voll,
+    // R8 optimiert den Code und wirft Ungenutztes raus.
     buildTypes {
-        debug { signingConfig signingConfigs.debug }
-        release { minifyEnabled false }
+        debug {
+            signingConfig signingConfigs.debug
+            debuggable false
+            jniDebuggable false
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        release {
+            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
     }
 
     compileOptions {
