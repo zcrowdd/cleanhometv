@@ -210,6 +210,7 @@ public class MainActivity extends Activity {
         });
         readPcExtras(getIntent());
         createdThisBoot = true;
+        ui.postDelayed(updateTick, 90_000);           // 1,5 min nach dem Start, dann alle 6 Stunden
         try {
             ((android.hardware.input.InputManager) getSystemService(INPUT_SERVICE)).registerInputDeviceListener(padListener, ui);
         } catch (Exception ignored) { }
@@ -246,6 +247,7 @@ public class MainActivity extends Activity {
         if (msm == null) initMedia();     // z. B. wenn die Berechtigung erst jetzt erteilt wurde
         wizHome();
         resetIdle();
+        ui.postDelayed(this::maybeOfferUpdate, 1500);
         for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isPaused()) a.resume();
     }
 
@@ -1388,6 +1390,7 @@ public class MainActivity extends Activity {
             if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
+        items.add(new MItem("⬆  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
         items.add(new MItem("STIMMUNG", null));
         items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(0)));
         items.add(new MItem("🌧  Regen am Fenster", () -> openAmbient(1)));
@@ -2084,6 +2087,74 @@ public class MainActivity extends Activity {
     private static final String EXT = "external";
     private String wizExternal;
     private boolean wizCapturing;
+
+    // ================================================================ Selbst-Update
+
+    private static final long UPDATE_EVERY = 6 * 60 * 60 * 1000L;
+    private volatile boolean updateBusy;
+    private int updatePending = -1;          // gefundene neuere Version, wird gezeigt, sobald CleanHome vorne ist
+
+    private final Runnable updateTick = new Runnable() {
+        @Override public void run() {
+            checkUpdate(false);
+            ui.postDelayed(this, UPDATE_EVERY);
+        }
+    };
+
+    private void checkUpdate(boolean manual) {
+        if (updateBusy) return;
+        updateBusy = true;
+        if (manual) toast("Suche nach Updates …");
+        new Thread(() -> {
+            int latest = Updater.latestVersion(), mine = Updater.installedVersion(this);
+            ui.post(() -> {
+                updateBusy = false;
+                if (latest < 0) { if (manual) toast("GitHub gerade nicht erreichbar"); return; }
+                if (latest <= mine) { if (manual) toast("CleanHome ist aktuell · Version " + mine); return; }
+                updatePending = latest;
+                maybeOfferUpdate();
+            });
+        }, "updateCheck").start();
+    }
+
+    /** Update anbieten - aber nur auf dem Home Screen, nie mitten im Film. */
+    private void maybeOfferUpdate() {
+        if (updatePending < 0 || !isFront || !homeVisible || menuLayer.getVisibility() == View.VISIBLE
+                || (saver != null && saver.getVisibility() == View.VISIBLE) || ambientLayer != null || splash != null) return;
+        final int v = updatePending;
+        updatePending = -1;
+        List<MItem> items = new ArrayList<>();
+        items.add(new MItem("⬆  Jetzt installieren", () -> runUpdate(v)));
+        items.add(new MItem("Später", () -> { }));
+        showMenu("Neue CleanHome-Version " + v + " verfügbar (installiert: " + Updater.installedVersion(this) + ")", items);
+    }
+
+    private void runUpdate(int v) {
+        if (Build.VERSION.SDK_INT >= 26 && !getPackageManager().canRequestPackageInstalls()) {
+            toast("Einmalig erlauben: CleanHome darf Apps installieren – dann nochmal „Nach Updates suchen“");
+            try {
+                startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        android.net.Uri.parse("package:" + getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                lastLeftByLaunch = System.currentTimeMillis();
+                settingsOpenedAt = System.currentTimeMillis();
+            } catch (Exception ignored) { }
+            return;
+        }
+        toast("Lade Version " + v + " …");
+        new Thread(() -> {
+            final int[] last = {-1};
+            java.io.File f = Updater.download(this, pc -> {
+                if (pc / 25 != last[0]) { last[0] = pc / 25; ui.post(() -> toast("Update wird geladen · " + pc + " %")); }
+            });
+            ui.post(() -> {
+                if (f == null) { toast("Download fehlgeschlagen – später nochmal versuchen"); return; }
+                toast("Gleich erscheint „Installieren“ – einmal OK drücken");
+                lastLeftByLaunch = System.currentTimeMillis();
+                settingsOpenedAt = System.currentTimeMillis();       // Waechter nicht dazwischenfunken lassen
+                if (!Updater.install(this, f)) toast("Installation konnte nicht gestartet werden");
+            });
+        }, "update").start();
+    }
 
     // ================================================================ Stimmungs-Szenen
 
