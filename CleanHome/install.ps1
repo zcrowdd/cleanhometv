@@ -29,7 +29,12 @@ if (-not (Test-Path $adb)) {
 function Sh([string]$c) { & $adb -s $T shell $c }
 
 & $adb connect $T | Out-Host
-Write-Host "Falls am TV 'Debugging zulassen?' kommt: 'Immer erlauben' + OK. Dann Enter." ; Read-Host | Out-Null
+# nur warten, wenn der Stick die Verbindung noch nicht erlaubt hat
+$st = "$(& $adb -s $T get-state 2>$null)".Trim()
+if ($st -ne "device") {
+    Write-Host "Am TV 'Debugging zulassen?' mit 'Immer erlauben' + OK bestaetigen ..." -ForegroundColor Yellow
+    for ($w = 0; $w -lt 60 -and "$(& $adb -s $T get-state 2>$null)".Trim() -ne "device"; $w++) { Start-Sleep 1 }
+}
 if ((& $adb -s $T get-state 2>$null) -ne "device") { Write-Host "Keine Verbindung." -ForegroundColor Red; exit 1 }
 
 if ($Undo) {
