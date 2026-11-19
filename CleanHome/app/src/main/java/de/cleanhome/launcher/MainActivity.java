@@ -204,6 +204,7 @@ public class MainActivity extends Activity {
         setContentView(buildUi());
         // Fokus wandert z. B. zu Einstellungen oder ins Menue -> Licht neu berechnen (nicht die alte App-Farbe behalten)
         root.getViewTreeObserver().addOnGlobalFocusChangeListener((o, n) -> { if (homeVisible) scheduleLights(250); });
+        root.getViewTreeObserver().addOnScrollChangedListener(this::eqVisibilityCheck);
         root.post(() -> {                     // Hintergrundbild deckt alles -> zwei Vollbild-Fuellungen pro Frame sparen
             root.setBackground(null);
             getWindow().setBackgroundDrawable(null);
@@ -249,6 +250,7 @@ public class MainActivity extends Activity {
         resetIdle();
         ui.postDelayed(this::maybeOfferUpdate, 1500);
         for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isPaused()) a.resume();
+        ui.postDelayed(this::eqVisibilityCheck, 300);
     }
 
     /** Standbild des Home Screens merken, damit es beim naechsten Home-Druck sofort da ist. */
@@ -784,12 +786,15 @@ public class MainActivity extends Activity {
     }
 
     /** Banner einmal auf Kachelgroesse rechnen, statt es bei jedem Bild aus voller Groesse zu skalieren. */
+    // Kachelbilder: genau Kachelgroesse, 2 Byte pro Pixel (RGB_565) statt 4 - halber Speicher, gleiches Aussehen
+    // (durchsichtige Stellen werden vorher mit dem Kachel-Hintergrund gefuellt).
     private Drawable scaledBanner(Drawable src) {
         if (src == null) return null;
         int w = dp(232), h = dp(131);
         Drawable d = src.getConstantState() != null ? src.getConstantState().newDrawable().mutate() : src;
         int iw = d.getIntrinsicWidth(), ih = d.getIntrinsicHeight();
-        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+        b.eraseColor(SURFACE);
         Canvas c = new Canvas(b);
         if (iw > 0 && ih > 0) {                       // wie CENTER_CROP
             float s = Math.max(w / (float) iw, h / (float) ih);
@@ -798,6 +803,20 @@ public class MainActivity extends Activity {
             d.setBounds(l, t, l + dw, t + dh);
         } else d.setBounds(0, 0, w, h);
         d.draw(c);
+        return new android.graphics.drawable.BitmapDrawable(getResources(), b);
+    }
+
+    /** Beliebiges Bild auf Kachelgroesse zuschneiden (wie CENTER_CROP), RGB_565. Das Original wird freigegeben. */
+    private Drawable tileFromBitmap(Bitmap src) {
+        int w = dp(232), h = dp(131);
+        Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+        b.eraseColor(SURFACE);
+        Canvas c = new Canvas(b);
+        float sc = Math.max(w / (float) src.getWidth(), h / (float) src.getHeight());
+        float dw = src.getWidth() * sc, dh = src.getHeight() * sc;
+        Paint fp = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+        c.drawBitmap(src, null, new android.graphics.RectF((w - dw) / 2f, (h - dh) / 2f, (w + dw) / 2f, (h + dh) / 2f), fp);
+        src.recycle();
         return new android.graphics.drawable.BitmapDrawable(getResources(), b);
     }
 
@@ -853,7 +872,7 @@ public class MainActivity extends Activity {
                 }
                 int col = gameColor(name, bm);
                 a.color = col;
-                a.banner = bm != null ? new android.graphics.drawable.BitmapDrawable(getResources(), bm)
+                a.banner = bm != null ? tileFromBitmap(bm)
                         : textBanner(name, g.optString("src", "PC").toUpperCase(Locale.ROOT) + "  ·  PC", col, null);
                 out.add(a);
             }
@@ -916,7 +935,7 @@ public class MainActivity extends Activity {
         Paint bar = new Paint();
         bar.setColor(color);
         c.drawRect(0, h - 8, w, h, bar);
-        return new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
+        return tileFromBitmap(bmp);
     }
 
     private static int blendDark(int c) {
@@ -946,7 +965,7 @@ public class MainActivity extends Activity {
             }
             p.edit().putString("history", neu.toString()).apply();
             buildResumeApps();
-            if (homeVisible && isFront) render(null, null);
+            updateResumeRow();
         } catch (Exception ignored) { }
     }
 
@@ -990,7 +1009,11 @@ public class MainActivity extends Activity {
     }
 
     /** Eine automatische Reihe (Weiterschauen / PC-Spiele) in den Home Screen haengen. */
+    private LinearLayout resumeLine;          // Reihe "Weiterschauen" - wird einzeln aktualisiert
+    private TextView resumeCount;
+
     private void addAutoRow(String id, String name, List<AppInfo> list) {
+        if (ROW_RESUME.equals(id)) { resumeLine = null; resumeCount = null; }
         if (list.isEmpty()) return;
         TextView cnt = tv(11, GRAY_2, fMono);
         cnt.setText(String.format(Locale.ROOT, "%02d", list.size()));
@@ -1011,6 +1034,20 @@ public class MainActivity extends Activity {
         hlp.bottomMargin = -dp(8);
         rowsBox.addView(hs, hlp);
         for (AppInfo a : list) line.addView(tile(a, id, true));
+        if (ROW_RESUME.equals(id)) { resumeLine = line; resumeCount = cnt; }
+    }
+
+    /** Nur die Weiterschauen-Reihe neu fuellen statt die ganze Startseite neu aufzubauen. */
+    private void updateResumeRow() {
+        if (!isFront || !homeVisible) return;                     // beim naechsten Zurueckkommen wird ohnehin gezeichnet
+        if (resumeLine == null || resumeApps.isEmpty()) { render(null, null); return; }   // Reihe entsteht/verschwindet
+        View f = getCurrentFocus();
+        int focusIdx = f != null && f.getParent() == resumeLine ? resumeLine.indexOfChild(f) : -1;
+        resumeLine.removeAllViews();
+        for (AppInfo a : resumeApps) resumeLine.addView(tile(a, ROW_RESUME, true));
+        if (resumeCount != null) resumeCount.setText(String.format(Locale.ROOT, "%02d", resumeApps.size()));
+        if (focusIdx >= 0 && resumeLine.getChildCount() > 0)
+            resumeLine.getChildAt(Math.min(focusIdx, resumeLine.getChildCount() - 1)).requestFocus();
     }
 
     private boolean visible(String pkg) {
@@ -1589,7 +1626,7 @@ public class MainActivity extends Activity {
         pt.setTypeface(fMono);
         pt.setTextSize(26);
         c.drawText("▶ PLAY", 68, 87, pt);
-        return new android.graphics.drawable.BitmapDrawable(getResources(), bmp);
+        return tileFromBitmap(bmp);
     }
 
     private void readPcExtras(Intent i) {
@@ -2210,6 +2247,7 @@ public class MainActivity extends Activity {
         vv.setVideoPath(f.getAbsolutePath());
         ui.postDelayed(() -> {                              // darunter liegende Ebenen nicht mehr mitzeichnen
             if (ambientLayer != l) return;
+            eqVisibilityCheck();
             int idx = root.indexOfChild(l);
             for (int k = 0; k < idx; k++) {
                 View v = root.getChildAt(k);
@@ -2236,6 +2274,7 @@ public class MainActivity extends Activity {
         ambientType = -1;
         for (View v : hiddenUnderAmbient) v.setVisibility(View.VISIBLE);
         hiddenUnderAmbient.clear();
+        ui.post(this::eqVisibilityCheck);
         final android.widget.VideoView vv = ambientVideo;
         ambientVideo = null;
         l.animate().alpha(0f).setDuration(400).withEndAction(() -> {
@@ -2860,6 +2899,19 @@ public class MainActivity extends Activity {
     private final android.animation.ObjectAnimator[] eqAnims = new android.animation.ObjectAnimator[3];
 
     /** E3: kleine Equalizer-Balken, solange Musik laeuft. */
+    /** Equalizer nur animieren, solange er wirklich zu sehen ist (sonst zeichnet der Stick jedes Bild umsonst neu). */
+    private final android.graphics.Rect eqRect = new android.graphics.Rect();
+    private void eqVisibilityCheck() {
+        if (eqBars[0] == null) return;
+        boolean vis = isFront && eqBars[0].isShown() && eqBars[0].getGlobalVisibleRect(eqRect)
+                && (saver == null || saver.getVisibility() != View.VISIBLE) && ambientLayer == null;
+        for (android.animation.ObjectAnimator a : eqAnims) {
+            if (a == null || !a.isStarted()) continue;
+            if (!vis && !a.isPaused()) a.pause();
+            else if (vis && a.isPaused()) a.resume();
+        }
+    }
+
     private void setEq(boolean on) {
         long[] dur = {420, 560, 480};
         for (int i = 0; i < 3; i++) {
@@ -3204,7 +3256,7 @@ public class MainActivity extends Activity {
         saverContent.setScaleX(0.96f); saverContent.setScaleY(0.96f);
         saverContent.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(250).setDuration(1400)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
-        saver.animate().alpha(1f).setDuration(900).withEndAction(this::hideUnderSaver).start();
+        saver.animate().alpha(1f).setDuration(900).withEndAction(() -> { hideUnderSaver(); eqVisibilityCheck(); }).start();
         wizSaver(true);
         saverContent.setTranslationX(0);
         saverContent.setTranslationY(0);
@@ -3254,6 +3306,7 @@ public class MainActivity extends Activity {
     private void hideSaver() {
         saverReturnPkg = null;
         showUnderSaver();
+        ui.post(this::eqVisibilityCheck);
         if (saver == null || saver.getVisibility() != View.VISIBLE) return;
         ui.removeCallbacks(driftTick);
         ui.removeCallbacks(cornerTick);
