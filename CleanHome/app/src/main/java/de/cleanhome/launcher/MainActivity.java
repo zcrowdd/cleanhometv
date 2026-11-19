@@ -3365,42 +3365,37 @@ public class MainActivity extends Activity {
         return Math.abs(Color.red(a) - Color.red(b)) + Math.abs(Color.green(a) - Color.green(b)) + Math.abs(Color.blue(a) - Color.blue(b));
     }
 
-    /** Ecken-Farbe: mit Govee = Toene rund um die Govee-Farbe (leicht wandernd), sonst die Farbpalette. */
+    /**
+     * Ecken-Farben, die immer zusammenpassen: alle vier Ecken kommen aus EINEM Grundton
+     * (benachbarte Farbtoene, gleiche Saettigung und Helligkeit). Grundton = aktuelle Govee-Farbe,
+     * sonst wandert er langsam durch eine Reihe harmonischer Toene (Blau -> Violett -> Magenta -> ... ).
+     */
+    private static final float[] MOOD_HUES = {214f, 232f, 258f, 284f, 312f, 338f, 196f, 178f};   // abgestimmte Grundtoene
+    private static final float[] CORNER_SHIFT = {0f, 18f, -14f, 30f};                             // kleine Abstaende = harmonisch
+
     private int cornerColor(int c) {
         int base = goveeBase;
-        if (base == 0) return PALETTE[(CORNER_OFS[c] + cornerStep) % PALETTE.length];
-        float[] hsv = new float[3];
-        Color.colorToHSV(base, hsv);
-        float[] shift = {0f, 16f, -16f, 30f};
-        float wobble = (float) Math.sin((cornerStep + c * 1.7) * 0.9) * 8f;
-        hsv[0] = (hsv[0] + shift[c] + wobble + 360f) % 360f;
-        hsv[1] = hsv[1] < 0.15f ? hsv[1] : Math.min(1f, Math.max(0.55f, hsv[1]));
-        hsv[2] = Math.max(0.75f, hsv[2]);
-        return Color.HSVToColor(hsv);
-    }
-
-    private void applySaverAccent(int c) {
-        if (saverClock != null) saverClock.setAccent(c);
-        if (saverDust != null) saverDust.setAccent(c);
-        if (saverGlow != null) saverGlow.setColors(new int[]{0x38000000 | (c & 0xFFFFFF), 0x00000000});
-    }
-
-    /** Begruessung je nach Uhrzeit + was gerade laeuft. */
-    private void updateSaverInfo() {
-        if (saverHello == null) return;
-        int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
-        String g = h < 5 ? "GUTE NACHT" : h < 11 ? "GUTEN MORGEN" : h < 17 ? "GUTEN TAG" : h < 22 ? "GUTEN ABEND" : "GUTE NACHT";
-        saverHello.setText(g + "  ·  BECKINGEN");
-        if (wLine != null && !wLine.isEmpty()) sWeather.setText(wLine);
-        android.media.session.MediaController c = npCtrl;
-        String line = null;
-        if (c != null && c.getMetadata() != null && stateOf(c) == android.media.session.PlaybackState.STATE_PLAYING) {
-            String t = c.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_TITLE);
-            String a = c.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_ARTIST);
-            if (t != null) line = "♫  " + t + (a != null && !a.isEmpty() ? "  —  " + a : "");
+        float hue, sat, val;
+        if (base != 0) {
+            float[] hsv = new float[3];
+            Color.colorToHSV(base, hsv);
+            hue = hsv[0];
+            sat = hsv[1] < 0.15f ? hsv[1] : 0.78f;          // Weiss bleibt weiss, Farben einheitlich kraeftig
+            val = 0.95f;
+        } else {
+            // alle 6 Schritte (~1 Minute) ein Grundton weiter, weich dazwischen
+            float pos = cornerStep / 6f;
+            int i0 = ((int) Math.floor(pos)) % MOOD_HUES.length, i1 = (i0 + 1) % MOOD_HUES.length;
+            float f = pos - (float) Math.floor(pos);
+            float h0 = MOOD_HUES[i0], h1 = MOOD_HUES[i1];
+            if (Math.abs(h1 - h0) > 180f) { if (h1 > h0) h0 += 360f; else h1 += 360f; }
+            hue = (h0 + (h1 - h0) * f) % 360f;
+            sat = 0.78f;
+            val = 0.95f;
         }
-        saverMusic.setVisibility(line != null ? View.VISIBLE : View.GONE);
-        if (line != null) saverMusic.setText(line);
+        float wobble = (float) Math.sin((cornerStep + c * 1.7) * 0.9) * 5f;
+        float h = (hue + CORNER_SHIFT[c] + wobble + 360f) % 360f;
+        return Color.HSVToColor(new float[]{h, sat, val});
     }
 
     // ---- Gemeinsamer Takt des Ruhebildschirms: EIN Bild pro Takt fuer Ecken, Inhalt, Lichtpunkte und Uhr
@@ -3496,7 +3491,7 @@ public class MainActivity extends Activity {
             FrameLayout holder = new FrameLayout(this);
             for (int k = 0; k < 2; k++) {
                 View b = new View(this) { @Override public boolean hasOverlappingRendering() { return false; } };
-                b.setBackground(cornerDrawable(PALETTE[CORNER_OFS[c] % PALETTE.length], size));
+                b.setBackground(cornerDrawable(cornerColor(c), size));
                 b.setAlpha(k == 0 ? 1f : 0f);
                 holder.addView(b, new FrameLayout.LayoutParams(-1, -1));
                 cornerViews[c][k] = b;
@@ -3506,7 +3501,7 @@ public class MainActivity extends Activity {
             if (c < 2) hl.topMargin = off; else hl.bottomMargin = off;
             s.addView(holder, hl);
             cornerHolders[c] = holder;
-            cornerCols[c] = PALETTE[CORNER_OFS[c] % PALETTE.length];
+            cornerCols[c] = cornerColor(c);
         }
 
         // feine, funkelnde Lichtpunkte ueber dem Farbschein
