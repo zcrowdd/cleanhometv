@@ -211,6 +211,8 @@ public class MainActivity extends Activity {
         });
         readPcExtras(getIntent());
         createdThisBoot = true;
+        installCrashLogger();
+        ui.postDelayed(this::ensureSaverSettings, 3000);
         ui.postDelayed(updateTick, 90_000);           // 1,5 min nach dem Start, dann alle 6 Stunden
         try {
             ((android.hardware.input.InputManager) getSystemService(INPUT_SERVICE)).registerInputDeviceListener(padListener, ui);
@@ -1428,6 +1430,7 @@ public class MainActivity extends Activity {
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
         items.add(new MItem("⬆  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
+        items.add(new MItem("🩺  Diagnose (Ruhebildschirm, letzter Fehler)", this::showDiagnose));
         items.add(new MItem("STIMMUNG", null));
         items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(0)));
         items.add(new MItem("⛈  Gewitter am Fenster", () -> openAmbient(1)));
@@ -2125,6 +2128,67 @@ public class MainActivity extends Activity {
     private static final String EXT = "external";
     private String wizExternal;
     private boolean wizCapturing;
+
+    // ================================================================ Absturz-Protokoll + Ruhebildschirm-Einstellungen
+
+    /** Stuerzt CleanHome ab, wird der Grund gespeichert (Einstellungen -> "Letzter Fehler"). */
+    private void installCrashLogger() {
+        final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            try {
+                java.io.StringWriter sw = new java.io.StringWriter();
+                e.printStackTrace(new java.io.PrintWriter(sw));
+                String txt = new java.text.SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(new java.util.Date())
+                        + " · v" + Updater.installedVersion(this) + " · " + t.getName() + "\n" + sw;
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("last_crash", txt.length() > 4000 ? txt.substring(0, 4000) : txt).commit();
+                java.io.File d = getExternalFilesDir(null);
+                if (d != null) try (java.io.FileWriter w = new java.io.FileWriter(new java.io.File(d, "crash.txt"), true)) { w.write(txt + "\n\n"); }
+            } catch (Throwable ignored) { }
+            if (prev != null) prev.uncaughtException(t, e);
+        });
+    }
+
+    private static final String DREAM = "de.cleanhome.launcher/de.cleanhome.launcher.SaverDream";
+
+    /**
+     * Prueft, ob Fire OS noch den CleanHome-Ruhebildschirm nutzt (ein Fire-OS- oder App-Update kann das zuruecksetzen).
+     * Mit der per ADB vergebenen Berechtigung WRITE_SECURE_SETTINGS repariert CleanHome es selbst.
+     */
+    private void ensureSaverSettings() {
+        try {
+            android.content.ContentResolver cr = getContentResolver();
+            String comp = android.provider.Settings.Secure.getString(cr, "screensaver_components");
+            String en = android.provider.Settings.Secure.getString(cr, "screensaver_enabled");
+            boolean ok = DREAM.equals(comp) && "1".equals(en);
+            if (ok) return;
+            if (checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                android.provider.Settings.Secure.putString(cr, "screensaver_components", DREAM);
+                android.provider.Settings.Secure.putString(cr, "screensaver_enabled", "1");
+                android.provider.Settings.Secure.putString(cr, "screensaver_activate_on_sleep", "1");
+                android.provider.Settings.Secure.putString(cr, "screensaver_activate_on_dock", "1");
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("saver_repaired",
+                        new java.text.SimpleDateFormat("dd.MM. HH:mm", Locale.GERMANY).format(new java.util.Date())).apply();
+            } else {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("saver_broken", String.valueOf(comp)).apply();
+            }
+        } catch (Exception ignored) { }
+    }
+
+    private void showDiagnose() {
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        String comp = null;
+        try { comp = android.provider.Settings.Secure.getString(getContentResolver(), "screensaver_components"); } catch (Exception ignored) { }
+        List<MItem> items = new ArrayList<>();
+        items.add(new MItem("RUHEBILDSCHIRM", null));
+        items.add(new MItem((DREAM.equals(comp) ? "✓  Fire OS nutzt den CleanHome-Ruhebildschirm" : "✗  Fire OS nutzt: " + comp), () -> ui.postDelayed(this::showDiagnose, 150)));
+        String rep = p.getString("saver_repaired", null);
+        if (rep != null) items.add(new MItem("Automatisch repariert am " + rep, () -> ui.postDelayed(this::showDiagnose, 150)));
+        items.add(new MItem("LETZTER FEHLER", null));
+        String c = p.getString("last_crash", null);
+        if (c == null) items.add(new MItem("Kein Absturz gespeichert", () -> ui.postDelayed(this::showDiagnose, 150)));
+        else for (String line : c.split("\n", 6)) if (!line.trim().isEmpty()) items.add(new MItem(line.trim().length() > 90 ? line.trim().substring(0, 90) + "…" : line.trim(), () -> ui.postDelayed(this::showDiagnose, 150)));
+        showMenu("Diagnose · Version " + Updater.installedVersion(this), items);
+    }
 
     // ================================================================ Selbst-Update
 
