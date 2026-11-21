@@ -337,11 +337,11 @@ public class MainActivity extends Activity {
         resetIdle();
     }
 
-    @Override
     // Lichtreflex: Richtung der letzten Pfeiltaste (fuer die Kipp-Bewegung) und ob die Taste gehalten wird
     private int navDx, navDy;
     private boolean navRepeat;
 
+    @Override
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
         // Controller: A = OK, B = Zurueck (damit CleanHome komplett mit dem Gamepad bedienbar ist)
