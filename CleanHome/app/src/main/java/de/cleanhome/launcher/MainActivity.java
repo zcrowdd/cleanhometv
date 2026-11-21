@@ -244,6 +244,7 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(weatherTick); ui.post(weatherTick);
         ui.removeCallbacks(netTick); ui.post(netTick);
         isFront = true;
+        closeVideoSession();              // aus einer Video-App zurueck -> ggf. in "Weiterschauen"
         // Solange CleanHome vorne ist, geht der Stick nie in den schwarzen Ruhezustand
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HomeMask.hide(this, true);        // CleanHome ist vorne -> Standbild ausblenden
@@ -950,6 +951,7 @@ public class MainActivity extends Activity {
     private void recordHistory(String pkg, String title) {
         if (pkg == null || title == null || title.isEmpty() || "Unbekannt".equals(title)) return;
         if (appKind(pkg) != K_VIDEO) return;
+        if (pkg.equals(vidPkg)) vidTitled = true;              // echter Titel bekannt -> kein Ersatz-Eintrag
         String key = pkg + "|" + title;
         if (key.equals(lastHistKey)) return;
         lastHistKey = key;
@@ -2117,7 +2119,34 @@ public class MainActivity extends Activity {
     /** Vom Waechter: eine andere App ist nach vorne gekommen -> Licht neu berechnen. */
     static void foregroundChanged() {
         MainActivity a = inst != null ? inst.get() : null;
-        if (a != null) a.ui.post(() -> a.scheduleLights(300));
+        if (a != null) a.ui.post(() -> { a.trackVideoSession(); a.scheduleLights(300); });
+    }
+
+    // ---- Weiterschauen ohne Titel: Netflix & Co. melden auf dem Fire TV oft keinen Titel.
+    // Wer mindestens eine Minute in einer Video-App war, bekommt sie trotzdem in "Weiterschauen".
+    private String vidPkg;
+    private long vidSince;
+    private boolean vidTitled;
+    private static final long VIDEO_MIN_MS = 60_000L;
+
+    private void trackVideoSession() {
+        if (isFront) return;                                   // CleanHome selbst ist vorne
+        String now = HomeWatchService.lastForegroundPkg;
+        if (now != null && now.equals(vidPkg)) return;
+        closeVideoSession();
+        if (now != null && appKind(now) == K_VIDEO) {
+            vidPkg = now;
+            vidSince = System.currentTimeMillis();
+            vidTitled = false;
+        }
+    }
+
+    private void closeVideoSession() {
+        String pkg = vidPkg;
+        vidPkg = null;
+        if (pkg == null || vidTitled || System.currentTimeMillis() - vidSince < VIDEO_MIN_MS) return;
+        AppInfo app = find(pkg);
+        if (app != null) recordHistory(pkg, app.label);
     }
 
     private String lightManual;   // vom Handy gesetzt: "bright" / "dim" / "off", null = Automatik
