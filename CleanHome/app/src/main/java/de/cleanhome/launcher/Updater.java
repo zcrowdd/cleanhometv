@@ -74,6 +74,7 @@ public final class Updater {
                     if (len > 0 && pr != null) { int p = (int) (done * 100 / len); if (p != lastP) { lastP = p; pr.percent(p); } }
                 }
             }
+            if (len > 0 && f.length() != len) { f.delete(); return null; }   // abgebrochener Download
             // nur installieren, wenn es wirklich CleanHome ist und neuer als das installierte
             PackageInfo pi = c.getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
             if (pi == null || !c.getPackageName().equals(pi.packageName)) return null;
@@ -115,11 +116,23 @@ public final class Updater {
                     MainActivity.lastLeftByLaunch = System.currentTimeMillis();
                     c.startActivity(confirm.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
                 }
-            } else if (st != PackageInstaller.STATUS_SUCCESS) {
+            } else if (st == PackageInstaller.STATUS_SUCCESS) {
+                c.getSharedPreferences("cleanhome", Context.MODE_PRIVATE).edit().remove("update_error").apply();
+                cleanup(c);
+            } else {
                 c.getSharedPreferences("cleanhome", Context.MODE_PRIVATE).edit()
                         .putString("update_error", String.valueOf(i.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))).apply();
             }
         }
+    }
+
+    /** Heruntergeladene APK wieder loeschen (spart Speicher auf dem Stick). */
+    public static void cleanup(Context c) {
+        try {
+            File dir = c.getExternalFilesDir("update");
+            if (dir != null) new File(dir, "cleanhome.apk").delete();
+            new File(c.getCacheDir(), "cleanhome.apk").delete();
+        } catch (Exception ignored) { }
     }
 
     private static String read(InputStream in) throws Exception {

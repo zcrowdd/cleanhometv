@@ -35,6 +35,7 @@ public class KeepAliveJob extends JobService {
     @Override
     public boolean onStartJob(JobParameters p) {
         HomeWatchService.start(this);
+        Health.ensureSaver(this);                       // Ruhebildschirm-Einstellung auch ohne offene App pruefen
         if (!MainActivity.createdThisBoot && SystemClock.elapsedRealtime() < 15 * 60 * 1000L) {
             HomeMask.show(this);
             try {

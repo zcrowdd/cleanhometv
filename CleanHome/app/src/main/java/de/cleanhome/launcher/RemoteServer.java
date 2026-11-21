@@ -53,16 +53,20 @@ public class RemoteServer {
     public void stop() {
         running = false;
         try { if (server != null) server.close(); } catch (Exception ignored) { }
+        pool.shutdownNow();
     }
 
     private void handle(Socket s) {
         try (Socket sock = s) {
             sock.setSoTimeout(5000);
+            java.net.InetAddress ip = sock.getInetAddress();
+            if (ip == null || !(ip.isSiteLocalAddress() || ip.isLoopbackAddress() || ip.isLinkLocalAddress())) return;   // nur Heimnetz
             BufferedReader in = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
             String first = in.readLine();
-            if (first == null) return;
+            if (first == null || first.length() > 4096) return;
             String line;
-            while ((line = in.readLine()) != null && !line.isEmpty()) { /* Header ignorieren */ }
+            int headers = 0;
+            while ((line = in.readLine()) != null && !line.isEmpty()) { if (++headers > 100) return; }   // Header ignorieren
             String[] parts = first.split(" ");
             if (parts.length < 2) return;
             String target = parts[1];
@@ -77,7 +81,8 @@ public class RemoteServer {
                 q.put(URLDecoder.decode(k, "UTF-8"), URLDecoder.decode(v, "UTF-8"));
             }
             OutputStream out = sock.getOutputStream();
-            if (!key.equals(q.get("k"))) {
+            String k = q.get("k");
+            if (k == null || !java.security.MessageDigest.isEqual(key.getBytes(StandardCharsets.UTF_8), k.getBytes(StandardCharsets.UTF_8))) {
                 write(out, 403, "text/html; charset=utf-8",
                         "<meta name=viewport content='width=device-width'><body style='background:#000;color:#ededed;font-family:sans-serif;padding:40px'>"
                                 + "<h2>Kein Zugriff</h2><p style='color:#888'>Scanne den QR-Code am Fernseher:<br>CleanHome &rarr; Einstellungen &rarr; Handy-Steuerung</p>");

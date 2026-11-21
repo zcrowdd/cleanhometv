@@ -39,6 +39,16 @@ public class HomeWatchService extends Service {
     private final long[] recent = new long[10];  // Schutz gegen Endlosschleifen
     private int recentIdx;
     private volatile long pausedUntil;
+    private volatile Process logcat;
+    /** Merkt fuer die Diagnose, wann der Bildschirm schwarz/wieder an war - der Dienst laeuft immer. */
+    private final android.content.BroadcastReceiver screen = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(Context c, Intent i) {
+            boolean off = Intent.ACTION_SCREEN_OFF.equals(i.getAction());
+            Health.stamp(c, off ? "screen_off" : "screen_on");
+            if (!off) Health.ensureSaver(c);
+        }
+    };
+    private boolean screenRegistered;
 
     public static void start(Context c) {
         Intent i = new Intent(c, HomeWatchService.class);
@@ -50,6 +60,14 @@ public class HomeWatchService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(1, buildNotification());
+        if (!screenRegistered) {
+            try {
+                android.content.IntentFilter f = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
+                f.addAction(Intent.ACTION_SCREEN_ON);
+                registerReceiver(screen, f);
+                screenRegistered = true;
+            } catch (Exception ignored) { }
+        }
         if (worker == null || !worker.isAlive()) {
             Log.i(TAG, "Waechter gestartet");
             running = true;
@@ -89,6 +107,7 @@ public class HomeWatchService extends Service {
                 p = Runtime.getRuntime().exec(new String[]{"logcat", "-T", "1", "-b", "main,system,events",
                         "ActivityManager:I", "ActivityTaskManager:I",
                         "am_set_resumed_activity:I", "am_resume_activity:I", "*:S"});
+                logcat = p;
                 BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
                 String line;
                 while (running && (line = r.readLine()) != null) {
@@ -166,6 +185,8 @@ public class HomeWatchService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        try { if (logcat != null) logcat.destroy(); } catch (Exception ignored) { }   // blockierendes readLine beenden
+        if (screenRegistered) try { unregisterReceiver(screen); } catch (Exception ignored) { }
         super.onDestroy();
     }
 
