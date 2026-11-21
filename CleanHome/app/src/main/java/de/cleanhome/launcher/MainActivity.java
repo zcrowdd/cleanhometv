@@ -130,6 +130,7 @@ public class MainActivity extends Activity {
         Intent launch;
         Drawable banner, icon;
         int color = BLUE;
+        int cat = -1;               // Kategorie in "Alle Apps" (siehe CAT_NAMES)
     }
 
     static class Row {
@@ -155,7 +156,8 @@ public class MainActivity extends Activity {
     private FrameLayout root;
     private ScrollView scroll;
     private LinearLayout rowsBox;
-    private GridLayout grid;
+    private GridLayout grid;          // erstes Kategorie-Raster (fuer Fokus und Einblend-Animation)
+    private LinearLayout allBox;
     private TextView heroTitle, heroPkg, heroHint, dateView, appCount, netView;
     private GradientDrawable glow, netDot;
     private int glowColor = BLUE;
@@ -464,12 +466,12 @@ public class MainActivity extends Activity {
         col.addView(rowsBox, new LinearLayout.LayoutParams(-1, -2));
 
         appCount = tv(11, GRAY_2, fMono);
-        col.addView(sectionHeader("ALLE APPS", appCount, 16));
-        grid = new GridLayout(this);
-        grid.setColumnCount(GRID_COLUMNS);
-        grid.setClipChildren(false);
-        grid.setClipToPadding(false);
-        col.addView(grid, new LinearLayout.LayoutParams(-2, -2));
+        grid = newGrid();
+        // "Alle Apps" nach Kategorien: je Kategorie eine Ueberschrift + ein Raster (wird in render() gefuellt)
+        allBox = new LinearLayout(this);
+        allBox.setOrientation(LinearLayout.VERTICAL);
+        allBox.setClipChildren(false);
+        col.addView(allBox, new LinearLayout.LayoutParams(-1, -2));
 
         // Ebenen ueber allem: Menue + Bildschirmschoner
         menuLayer = new FrameLayout(this);
@@ -760,7 +762,10 @@ public class MainActivity extends Activity {
                     if (fav != null && !fav.apps.contains(PC_PKG)) { fav.apps.add(0, PC_PKG); saveRows(); }
                     pp.edit().putBoolean(KEY_PC_ADDED, true).apply();
                 }
+                int junk = autoHideJunk();
                 render(null, null);
+                if (junk > 0) toast(junk + (junk == 1 ? " unnötige App" : " unnötige Apps")
+                        + " ausgeblendet · zurückholen: Einstellungen → Ausgeblendete Apps");
             });
         }).start();
     }
@@ -821,6 +826,64 @@ public class MainActivity extends Activity {
         c.drawBitmap(src, null, new android.graphics.RectF((w - dw) / 2f, (h - dh) / 2f, (w + dw) / 2f, (h + dh) / 2f), fp);
         src.recycle();
         return new android.graphics.drawable.BitmapDrawable(getResources(), b);
+    }
+
+    private GridLayout newGrid() {
+        GridLayout g = new GridLayout(this);
+        g.setColumnCount(GRID_COLUMNS);
+        g.setClipChildren(false);
+        g.setClipToPadding(false);
+        return g;
+    }
+
+    // ---- Kategorien fuer "Alle Apps"
+    private static final String[] CAT_NAMES = {"STREAMING", "MUSIK", "SPIELE", "WERKZEUGE", "AMAZON", "SONSTIGE"};
+    private static final String[] TOOL_WORDS = {
+            "downloader", "browser", "silk", "cloud9", "firefox", "chrome", "file", "datei", "explorer", "x-plore",
+            "vpn", "airscreen", "send", "speedtest", "analiti", "appstore", "venezia", "settings", "einstellung",
+            "terminal", "adb", "remote", "wake", "manager", "tool"
+    };
+
+    private int category(AppInfo a) {
+        int k = appKind(a.pkg);
+        if (k == K_VIDEO) return 0;
+        if (k == K_AUDIO) return 1;
+        if (k == K_GAME) return 2;
+        String s = (a.pkg + " " + a.label).toLowerCase(Locale.ROOT);
+        for (String w : TOOL_WORDS) if (s.contains(w)) return 3;
+        if (a.pkg.startsWith("com.amazon.")) return 4;
+        return 5;
+    }
+
+    // ---- Unnoetige Amazon-Apps einmalig ausblenden (zurueckholen: Einstellungen -> Ausgeblendete Apps)
+    private static final String KEY_AUTO_HIDE = "auto_hide_v1";
+    private static final String[] JUNK_LABELS = {
+            "minitv", "amazon minitv", "luna", "amazon luna", "amazon photos", "amazon fotos", "fotos",
+            "amazon kids", "freevee", "amazon freevee", "imdb tv", "hilfe", "help", "tipps", "amazon shopping",
+            "alexa shopping", "kindle"
+    };
+    private static final String[] JUNK_PKG_PARTS = {
+            "minitv", ".luna", "tahoe", "freevee", "imdb", "bueller.photos", "shopping"
+    };
+
+    /** @return Anzahl neu ausgeblendeter Apps (nur beim allerersten Mal mit dieser Version > 0). */
+    private int autoHideJunk() {
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (p.getBoolean(KEY_AUTO_HIDE, false)) return 0;
+        int n = 0;
+        for (AppInfo a : apps) {
+            if (PC_PKG.equals(a.pkg) || hidden.contains(a.pkg)) continue;
+            String l = a.label == null ? "" : a.label.trim().toLowerCase(Locale.ROOT);
+            boolean junk = false;
+            for (String j : JUNK_LABELS) if (l.equals(j)) junk = true;
+            for (String j : JUNK_PKG_PARTS) if (a.pkg.toLowerCase(Locale.ROOT).contains(j)) junk = true;
+            Row fav = findRow(FAV);
+            if (junk && fav != null && fav.apps.contains(a.pkg)) junk = false;   // Favoriten nie anfassen
+            if (junk) { hidden.add(a.pkg); n++; }
+        }
+        saveHidden();
+        p.edit().putBoolean(KEY_AUTO_HIDE, true).apply();
+        return n;
     }
 
     private boolean isSystemHidden(String pkg) {
@@ -1138,7 +1201,8 @@ public class MainActivity extends Activity {
         View cf = getCurrentFocus();
         if (focusPkg == null && cf != null && cf.getTag() instanceof String) keep = (String) cf.getTag();
         rowsBox.removeAllViews();
-        grid.removeAllViews();
+        allBox.removeAllViews();
+        grid = newGrid();
 
         boolean resumeDone = false;
         for (Row r : rows) {
@@ -1185,11 +1249,26 @@ public class MainActivity extends Activity {
         boolean pcInRow = false;
         for (Row r : rows) if (r.apps.contains(PC_PKG)) pcInRow = true;
         int n = 0;
+        List<List<AppInfo>> byCat = new ArrayList<>();
+        for (int i = 0; i < CAT_NAMES.length; i++) byCat.add(new ArrayList<>());
         for (AppInfo a : apps) {
             if (hidden.contains(a.pkg)) continue;
             if (PC_PKG.equals(a.pkg) && pcInRow) continue;     // nicht doppelt anzeigen
-            grid.addView(tile(a, ALL, false));
+            if (a.cat < 0) a.cat = category(a);
+            byCat.get(a.cat).add(a);
             n++;
+        }
+        boolean firstGrid = true;
+        for (int i = 0; i < CAT_NAMES.length; i++) {
+            List<AppInfo> list = byCat.get(i);
+            if (list.isEmpty()) continue;
+            TextView cnt = tv(11, GRAY_2, fMono);
+            cnt.setText(String.format(Locale.ROOT, "%02d", list.size()));
+            allBox.addView(sectionHeader(CAT_NAMES[i], cnt, 16));
+            GridLayout g = firstGrid ? grid : newGrid();
+            firstGrid = false;
+            for (AppInfo a : list) g.addView(tile(a, ALL, false));
+            allBox.addView(g, new LinearLayout.LayoutParams(-2, -2));
         }
         appCount.setText(String.format(Locale.ROOT, "%02d", n));
 
