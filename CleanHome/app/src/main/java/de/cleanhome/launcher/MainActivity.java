@@ -338,6 +338,10 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    // Lichtreflex: Richtung der letzten Pfeiltaste (fuer die Kipp-Bewegung) und ob die Taste gehalten wird
+    private int navDx, navDy;
+    private boolean navRepeat;
+
     public boolean dispatchKeyEvent(KeyEvent e) {
         int k = e.getKeyCode();
         // Controller: A = OK, B = Zurueck (damit CleanHome komplett mit dem Gamepad bedienbar ist)
@@ -345,6 +349,13 @@ public class MainActivity extends Activity {
             int nk = k == KeyEvent.KEYCODE_BUTTON_A ? KeyEvent.KEYCODE_DPAD_CENTER : KeyEvent.KEYCODE_BACK;
             return dispatchKeyEvent(new KeyEvent(e.getDownTime(), e.getEventTime(), e.getAction(), nk, e.getRepeatCount(),
                     e.getMetaState(), e.getDeviceId(), e.getScanCode(), e.getFlags(), e.getSource()));
+        }
+        if (e.getAction() == KeyEvent.ACTION_DOWN) {
+            navRepeat = e.getRepeatCount() > 0;
+            if (k == KeyEvent.KEYCODE_DPAD_LEFT) { navDx = -1; navDy = 0; }
+            else if (k == KeyEvent.KEYCODE_DPAD_RIGHT) { navDx = 1; navDy = 0; }
+            else if (k == KeyEvent.KEYCODE_DPAD_UP) { navDx = 0; navDy = -1; }
+            else if (k == KeyEvent.KEYCODE_DPAD_DOWN) { navDx = 0; navDy = 1; }
         }
         if (ambientLayer != null) {
             if (e.getAction() == KeyEvent.ACTION_UP) closeAmbient();
@@ -1343,6 +1354,17 @@ public class MainActivity extends Activity {
             t.addView(box, new FrameLayout.LayoutParams(-1, -1));
         }
 
+        // Lichtreflex: schmaler, schraeger Glanzstreifen, der beim Markieren einmal ueber die Kachel laeuft
+        final int sheenW = dp(big ? 120 : 70);
+        View sheen = new View(this);
+        sheen.setBackground(new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[]{0x00FFFFFF, 0x38FFFFFF, 0x00FFFFFF}));
+        sheen.setRotation(18f);
+        sheen.setScaleY(1.6f);
+        sheen.setVisibility(View.INVISIBLE);
+        t.addView(sheen, new FrameLayout.LayoutParams(sheenW, -1));
+        t.setCameraDistance(8000 * getResources().getDisplayMetrics().density);
+
         GradientDrawable fg = new GradientDrawable();
         fg.setCornerRadius(dp(radius));
         fg.setColor(moving ? 0x260A72EF : 0x00000000);
@@ -1358,13 +1380,30 @@ public class MainActivity extends Activity {
         t.setOnFocusChangeListener((v, has) -> {
             if (!moving) fg.setStroke(has ? dp(2) : dp(1), has ? 0xFFFFFFFF : BORDER);
             v.animate().cancel();
+            sheen.animate().cancel();
+            sheen.setVisibility(View.INVISIBLE);
+            boolean fx = has && !moving && !navRepeat;          // beim schnellen Durchscrollen keine Effekte
+            if (fx) {                                           // leicht in Bewegungsrichtung gekippt, federt zurueck
+                v.setRotationY(navDx * 6f);
+                v.setRotationX(-navDy * 5f);
+            }
             v.animate().setStartDelay(0)        // Verzoegerung vom Einblenden nicht uebernehmen
                     .scaleX(has ? 1.07f : 1f).scaleY(has ? 1.07f : 1f)
+                    .rotationX(0f).rotationY(0f)
                     .alpha(LITE || has ? 1f : 0.8f)
                     .translationZ(has && !LITE ? dp(24) : 0)   // Schatten kosten auf schwachen Sticks viel
-                    .setDuration(LITE ? 140 : 200)
+                    .setDuration(fx ? 320 : (LITE ? 140 : 200))
                     .setInterpolator(new DecelerateInterpolator(1.6f))
                     .start();
+            if (fx && v.getWidth() > 0) {
+                sheen.setTranslationX(-sheenW * 1.4f);
+                sheen.setVisibility(View.VISIBLE);
+                sheen.animate().translationX(v.getWidth() + sheenW * 0.4f)
+                        .setStartDelay(90).setDuration(big ? 820 : 640)
+                        .setInterpolator(new AccelerateDecelerateInterpolator())
+                        .withEndAction(() -> sheen.setVisibility(View.INVISIBLE))
+                        .start();
+            }
             if (has) {
                 lastTile = v;
                 spotColor(a.color);
@@ -1554,17 +1593,75 @@ public class MainActivity extends Activity {
         showMenu("Ausgeblendete Apps", items);
     }
 
+    // ---- Glas-Menue: verschwommenes, abgedunkeltes Abbild des Home Screens hinter dem Menue
+    private boolean glassOn;
+
+    private void applyGlass() {
+        if (menuLayer.getVisibility() == View.VISIBLE) return;          // Untermenue: Glas bleibt
+        glassOn = false;
+        try {
+            int rw = root.getWidth(), rh = root.getHeight();
+            if (rw <= 0 || rh <= 0) return;
+            int w = Math.max(16, rw / 12), h = Math.max(9, rh / 12);   // winzig rechnen, gross weichzeichnen
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            Canvas c = new Canvas(b);
+            c.drawColor(BLACK);
+            c.scale(w / (float) rw, h / (float) rh);
+            root.draw(c);
+            boxBlur(b, 2);
+            boxBlur(b, 2);
+            boxBlur(b, 2);
+            android.graphics.drawable.BitmapDrawable bd = new android.graphics.drawable.BitmapDrawable(getResources(), b);
+            bd.setFilterBitmap(true);
+            menuLayer.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{
+                    bd, new android.graphics.drawable.ColorDrawable(0x80000000)}));
+            glassOn = true;
+        } catch (Throwable e) {
+            menuLayer.setBackgroundColor(0xB3000000);
+        }
+    }
+
+    /** Schneller Box-Weichzeichner (horizontal + vertikal) fuer kleine Bitmaps. */
+    private static void boxBlur(Bitmap b, int r) {
+        int w = b.getWidth(), h = b.getHeight();
+        int[] px = new int[w * h], tmp = new int[w * h];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        for (int pass = 0; pass < 2; pass++) {
+            int[] src = pass == 0 ? px : tmp, dst = pass == 0 ? tmp : px;
+            int outer = pass == 0 ? h : w, inner = pass == 0 ? w : h;
+            for (int o = 0; o < outer; o++) {
+                for (int i = 0; i < inner; i++) {
+                    int rs = 0, gs = 0, bs = 0, n = 0;
+                    for (int d = -r; d <= r; d++) {
+                        int j = Math.min(inner - 1, Math.max(0, i + d));
+                        int c = pass == 0 ? src[o * w + j] : src[j * w + o];
+                        rs += (c >> 16) & 0xFF; gs += (c >> 8) & 0xFF; bs += c & 0xFF; n++;
+                    }
+                    int v = 0xFF000000 | ((rs / n) << 16) | ((gs / n) << 8) | (bs / n);
+                    if (pass == 0) dst[o * w + i] = v; else dst[i * w + o] = v;
+                }
+            }
+        }
+        b.setPixels(px, 0, w, 0, 0, w, h);
+    }
+
     private void showMenu(String title, List<MItem> items) {
         if (focusBeforeMenu == null) focusBeforeMenu = getCurrentFocus();
+        applyGlass();
         menuLayer.removeAllViews();
 
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
-        panel.setBackground(rounded(SURFACE, BORDER, 12));
-        if (Build.VERSION.SDK_INT >= 21) panel.setElevation(dp(24));
+        if (glassOn) {                                  // milchiges Glas statt schwarzer Flaeche
+            panel.setBackground(rounded(0x24FFFFFF, 0x38FFFFFF, 14));
+        } else {
+            panel.setBackground(rounded(SURFACE, BORDER, 12));
+            if (Build.VERSION.SDK_INT >= 21) panel.setElevation(dp(24));
+        }
+        final int selBg = glassOn ? 0x2EFFFFFF : 0xFF1F1F1F;
 
-        TextView head = tv(11, GRAY_2, fMono);
+        TextView head = tv(11, glassOn ? 0xFFA6A6A6 : GRAY_2, fMono);
         head.setText(title.toUpperCase(Locale.GERMANY));
         head.setLetterSpacing(0.1f);
         head.setSingleLine(true);
@@ -1575,7 +1672,7 @@ public class MainActivity extends Activity {
         View first = null, last = null;
         for (MItem mi : items) {
             if (mi.action == null) {                    // Zwischenueberschrift, nicht auswaehlbar
-                TextView h = tv(10, GRAY_2, fMono);
+                TextView h = tv(10, glassOn ? 0xFFA6A6A6 : GRAY_2, fMono);
                 h.setText(mi.label);
                 h.setLetterSpacing(0.15f);
                 h.setPadding(dp(12), dp(14), dp(12), dp(6));
@@ -1590,7 +1687,7 @@ public class MainActivity extends Activity {
             GradientDrawable bg = rounded(0x00000000, 0, 8);
             t.setBackground(bg);
             t.setOnFocusChangeListener((v, has) -> {
-                bg.setColor(has ? 0xFF1F1F1F : 0x00000000);
+                bg.setColor(has ? selBg : 0x00000000);
                 t.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD));
             });
             t.setTextColor(mi.danger ? 0xCCF2555A : 0xFFBDBDBD);
@@ -1611,7 +1708,7 @@ public class MainActivity extends Activity {
             last.setNextFocusDownId(last.getId());
         }
         scroll.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
-        TextView foot = tv(11, GRAY_2, fMono);
+        TextView foot = tv(11, glassOn ? 0xFF8C8C8C : GRAY_2, fMono);
         foot.setText("Zurück = schließen");
         foot.setPadding(dp(12), dp(8), dp(12), dp(6));
         panel.addView(foot);
@@ -1637,6 +1734,8 @@ public class MainActivity extends Activity {
         scroll.setDescendantFocusability(android.view.ViewGroup.FOCUS_AFTER_DESCENDANTS);
         menuLayer.setVisibility(View.GONE);
         menuLayer.removeAllViews();
+        menuLayer.setBackgroundColor(0xB3000000);       // Glas-Abbild freigeben
+        glassOn = false;
     }
 
     private void hideMenu() {
