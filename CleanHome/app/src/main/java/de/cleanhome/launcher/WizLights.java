@@ -39,8 +39,23 @@ public class WizLights {
 
     public synchronized boolean hasLamps() { return !ips.isEmpty(); }
 
+    /**
+     * Farbe fuer die LEDs aufbereiten: Marken- und UI-Farben sind oft leicht entsaettigt (z. B. Spotify-Gruen #1DB954).
+     * Auf den Lampen wirkt das blass. Farbton bleibt, Saettigung und Helligkeit gehen hoch - die Helligkeit
+     * regelt ohnehin "dimming". Fast weisse/graue Farben bleiben, wie sie sind.
+     */
+    public static int ledColor(int c) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(c, hsv);
+        if (hsv[1] < 0.18f) return c;
+        hsv[1] = Math.min(1f, hsv[1] * 1.25f + 0.1f);
+        hsv[2] = 1f;
+        return Color.HSVToColor(hsv);
+    }
+
     /** Weicher Farbwechsel (~0,5 s) zu einer RGB-Farbe. */
-    public void fadeTo(int color, int dimming) {
+    public void fadeTo(int color0, int dimming) {
+        final int color = ledColor(color0);
         final int tr = Color.red(color), tg = Color.green(color), tb = Color.blue(color);
         submit(() -> {
             int sr = curR, sg = curG, sb = curB, sd = curDim;
@@ -53,7 +68,7 @@ public class WizLights {
                 curB = Math.round(sb + (tb - sb) * f);
                 curDim = Math.round(sd + (dimming - sd) * f);
                 send("{\"method\":\"setPilot\",\"params\":{\"state\":true,\"r\":" + curR + ",\"g\":" + curG
-                        + ",\"b\":" + curB + ",\"dimming\":" + Math.max(10, curDim) + "}}");
+                        + ",\"b\":" + curB + ",\"c\":0,\"w\":0,\"dimming\":" + Math.max(10, curDim) + "}}");
                 sleep(100);
             }
         });
@@ -79,18 +94,18 @@ public class WizLights {
                 if (Thread.currentThread().isInterrupted()) return;
                 float f = s / (float) steps;
                 for (int i = 0; i < n; i++) {
-                    int c = colors[i % colors.length];
+                    int c = ledColor(colors[i % colors.length]);
                     int r = Math.round(start[i][0] + (Color.red(c) - start[i][0]) * f);
                     int g = Math.round(start[i][1] + (Color.green(c) - start[i][1]) * f);
                     int b = Math.round(start[i][2] + (Color.blue(c) - start[i][2]) * f);
                     eachCur[i] = new int[]{r, g, b};
                     String j = "{\"method\":\"setPilot\",\"params\":{\"state\":true,\"r\":" + r + ",\"g\":" + g
-                            + ",\"b\":" + b + ",\"dimming\":" + Math.max(10, dimming) + "}}";
+                            + ",\"b\":" + b + ",\"c\":0,\"w\":0,\"dimming\":" + Math.max(10, dimming) + "}}";
                     sendTo(copy.get(i), j);
                 }
                 sleep(250);
             }
-            int c0 = colors[0];
+            int c0 = ledColor(colors[0]);
             curR = Color.red(c0); curG = Color.green(c0); curB = Color.blue(c0); curDim = dimming;
             lastJson = null;
         });

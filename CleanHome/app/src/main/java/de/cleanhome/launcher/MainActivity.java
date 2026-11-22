@@ -1627,32 +1627,33 @@ public class MainActivity extends Activity {
 
     private void openSettingsMenu() {
         List<MItem> items = new ArrayList<>();
-        // Fire-TV-Bereiche direkt (ohne Amazons Startseite), Zurueck fuehrt wieder zu CleanHome
-        items.add(new MItem("FIRE TV", null));
-        for (String[] fs : FIRE_SETTINGS) {
-            if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
-            else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
-        }
-        items.add(new MItem("↑  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
-        items.add(new MItem("Diagnose (Ruhebildschirm, letzter Fehler)", this::showDiagnose));
+        items.add(new MItem("LICHT", null));
+        items.add(new MItem("WiZ hinter dem Fernseher  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
+        items.add(new MItem("Govee im Raum  ·  " + (goveeOn ? "dimmt beim Streaming" : "aus"), this::openGoveeMenu));
         items.add(new MItem("STIMMUNG", null));
-        items.add(new MItem("Kaminfeuer", () -> openAmbient(0)));
-        items.add(new MItem("Gewitter am Fenster", () -> openAmbient(1)));
-        items.add(new MItem("Sternenhimmel", () -> openAmbient(2)));
-        items.add(new MItem("Nordlicht", () -> openAmbient(3)));
-        items.add(new MItem("SPEICHER", null));
+        items.add(new MItem("Kaminfeuer  ·  Szene", () -> openAmbient(0)));
+        items.add(new MItem("Gewitter am Fenster  ·  Szene", () -> openAmbient(1)));
+        items.add(new MItem("Sternenhimmel  ·  Szene", () -> openAmbient(2)));
+        items.add(new MItem("Nordlicht  ·  Szene", () -> openAmbient(3)));
+        items.add(new MItem("CLEANHOME", null));
+        items.add(new MItem("Handy-Steuerung  ·  QR-Code", this::showRemoteQr));
+        items.add(new MItem("Ausgeblendete Apps  ·  " + hidden.size(), this::openHiddenMenu));
+        items.add(new MItem("Ruhebildschirm jetzt starten", () -> ui.postDelayed(showSaver, 300)));
         items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
-        items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
+        items.add(new MItem("RAM vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
             boolean n = !autoRam();
             getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("auto_ram", n).apply();
             toast(n ? "RAM wird vor jedem App-Start freigemacht" : "Automatisches Freimachen aus");
         }));
-        items.add(new MItem("CLEANHOME", null));
-        items.add(new MItem("Handy-Steuerung (QR-Code)", this::showRemoteQr));
-        items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
-        items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
-        items.add(new MItem("Govee-Licht  ·  " + (goveeOn ? "dimmt bei Streaming" : "aus"), this::openGoveeMenu));
-        items.add(new MItem("Bildschirmschoner jetzt starten", () -> ui.postDelayed(showSaver, 300)));
+        // Fire-TV-Bereiche direkt (ohne Amazons Startseite), Zurueck fuehrt wieder zu CleanHome
+        items.add(new MItem("FIRE TV", null));
+        for (String[] fs : FIRE_SETTINGS) {
+            if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "  ·  ↗ Amazon", this::openSystemSettings));
+            else items.add(new MItem(fs[0] + "  ·  →", () -> openFireSettings(fs[1])));
+        }
+        items.add(new MItem("SYSTEM", null));
+        items.add(new MItem("Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
+        items.add(new MItem("Diagnose  ·  Ruhebildschirm, Fehler", this::showDiagnose));
         showMenu("Einstellungen", items);
     }
 
@@ -1756,25 +1757,53 @@ public class MainActivity extends Activity {
         panel.addView(head);
 
         View first = null, last = null;
+        boolean anyRow = false;
         for (MItem mi : items) {
             if (mi.action == null) {                    // Zwischenueberschrift, nicht auswaehlbar
-                TextView h = tv(10, glassOn ? 0xFFA6A6A6 : GRAY_2, fMono);
+                if (anyRow) {                           // feine Trennlinie zwischen Bereichen
+                    View line = new View(this);
+                    line.setBackgroundColor(glassOn ? GLASS_LINE : 0xFF1A1A1A);
+                    LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-1, dp(1));
+                    ll.setMargins(dp(14), dp(10), dp(14), 0);
+                    panel.addView(line, ll);
+                }
+                TextView h = tv(10, glassOn ? 0xFF8C8C8C : GRAY_2, fMono);
                 h.setText(mi.label);
                 h.setLetterSpacing(0.15f);
-                h.setPadding(dp(12), dp(14), dp(12), dp(6));
+                h.setPadding(dp(14), dp(12), dp(14), dp(6));
                 panel.addView(h);
                 continue;
             }
-            TextView t = tv(15, mi.danger ? RED : WHITE, fRegular);
-            t.setText(mi.label);
-            t.setPadding(dp(12), dp(11), dp(16), dp(11));
+            anyRow = true;
+            // "Name  ·  Wert" -> Name links, Wert rechtsbuendig und leiser (einheitliche Zeilen)
+            String label = mi.label, value = null;
+            int cut = label.lastIndexOf("  ·  ");
+            if (cut > 0) { value = label.substring(cut + 5).trim(); label = label.substring(0, cut).trim(); }
+            LinearLayout t = new LinearLayout(this);
+            t.setGravity(Gravity.CENTER_VERTICAL);
+            t.setPadding(dp(14), dp(11), dp(14), dp(11));
             t.setFocusable(true);
             t.setClickable(true);
+            TextView name = tv(15, mi.danger ? RED : WHITE, fRegular);
+            name.setText(label);
+            name.setSingleLine(true);
+            name.setEllipsize(TextUtils.TruncateAt.END);
+            t.addView(name, new LinearLayout.LayoutParams(0, -2, 1f));
+            TextView val = null;
+            if (value != null && !value.isEmpty()) {
+                val = tv(13, 0xFF8C8C8C, fMono);
+                val.setText(value);
+                val.setSingleLine(true);
+                t.addView(val, lpLeft(16));
+            }
+            final TextView valF = val;
             GradientDrawable bg = rounded(0x00000000, 0, R_S);
             t.setBackground(bg);
-            focusStyle(t, bg, R_S, 1.02f, 0x00000000, selBg, (v, has) ->
-                    t.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD)));
-            t.setTextColor(mi.danger ? 0xCCF2555A : 0xFFBDBDBD);
+            focusStyle(t, bg, R_S, 1.02f, 0x00000000, selBg, (v, has) -> {
+                name.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD));
+                if (valF != null) valF.setTextColor(has ? 0xFFBDBDBD : 0xFF8C8C8C);
+            });
+            name.setTextColor(mi.danger ? 0xCCF2555A : 0xFFBDBDBD);
             t.setOnClickListener(v -> {
                 hideMenuQuiet();
                 mi.action.run();
@@ -1800,7 +1829,7 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.setVerticalScrollBarEnabled(false);
         sv.addView(panel);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(520), -2, Gravity.CENTER);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(600), -2, Gravity.CENTER);
         lp.topMargin = dp(40);
         lp.bottomMargin = dp(40);
         menuLayer.addView(sv, lp);
@@ -4272,12 +4301,12 @@ public class MainActivity extends Activity {
     private static final String[][] FIRE_SETTINGS = {
             {"Netzwerk", "android.settings.WIRELESS_SETTINGS", "0"},
             {"Apps", "com.amazon.device.settings.action.APPLICATIONS", "0"},
-            {"Fernbedienungen & Bluetooth", "com.amazon.device.settings.action.CONTROLLERS", "0"},
-            {"Mein Fire TV (Info, Neustart, Entwickler)", "com.amazon.device.settings.action.DEVICE", "0"},
-            {"Bild & Ton", "", "1"},
-            {"Präferenzen (Datenschutz, Werbung, Sprache)", "", "1"},
+            {"Fernbedienungen und Bluetooth", "com.amazon.device.settings.action.CONTROLLERS", "0"},
+            {"Mein Fire TV", "com.amazon.device.settings.action.DEVICE", "0"},
+            {"Bild und Ton", "", "1"},
+            {"Präferenzen", "", "1"},
             {"Bedienungshilfen", "", "1"},
-            {"Konto & Profil", "", "1"},
+            {"Konto und Profil", "", "1"},
     };
     private static final String FIRE_SETTINGS_PKG = "com.amazon.tv.settings.v2";
 
