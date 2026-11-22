@@ -1746,7 +1746,7 @@ public class MainActivity extends Activity {
             panel.setBackground(rounded(SURFACE, BORDER, R_L));
             if (Build.VERSION.SDK_INT >= 21) panel.setElevation(dp(24));
         }
-        final int selBg = glassOn ? GLASS_SEL : 0xFF1F1F1F;
+        final int selBg = glassOn ? 0x24FFFFFF : 0xFF1F1F1F;
 
         TextView head = tv(11, glassOn ? 0xFFA6A6A6 : GRAY_2, fMono);
         head.setText(title.toUpperCase(Locale.GERMANY));
@@ -1799,7 +1799,9 @@ public class MainActivity extends Activity {
             final TextView valF = val;
             GradientDrawable bg = rounded(0x00000000, 0, R_S);
             t.setBackground(bg);
-            focusStyle(t, bg, R_S, 1.02f, 0x00000000, selBg, (v, has) -> {
+            // Menuezeilen: ruhige Markierung - nur helle Flaeche, kein Rahmen/Zoom/Glanz
+            t.setOnFocusChangeListener((v, has) -> {
+                bg.setColor(has ? selBg : 0x00000000);
                 name.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD));
                 if (valF != null) valF.setTextColor(has ? 0xFFBDBDBD : 0xFF8C8C8C);
             });
