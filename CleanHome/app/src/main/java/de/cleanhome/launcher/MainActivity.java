@@ -1672,8 +1672,79 @@ public class MainActivity extends Activity {
         render(r.id, a.pkg);
     }
 
+    // ================================================================ Schlafmodus
+    // Per iPhone-Kurzbefehl (Fokus "Schlafen") oder von Hand: alle LEDs aus, Ruhebildschirm ganz dunkel.
+    // Apps und Serien laufen ganz normal weiter. In den Einstellungen abschaltbar.
+    private boolean nightActive;
+
+    private boolean nightFeature() { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("night_feature", true); }
+
+    private void setNight(boolean on, boolean fromPhone) {
+        if (on && !nightFeature()) return;
+        if (on == nightActive) return;
+        nightActive = on;
+        final SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        p.edit().putBoolean("night", on).apply();
+        if (on) {
+            ui.removeCallbacks(resendSync);
+            wiz.cancel();
+            if (wiz.hasLamps()) { wiz.white(2200, 10); ui.postDelayed(() -> { if (nightActive) wiz.off(); }, 1200); }  // sanft runter, dann aus
+            lightKey = "night";
+            if (goveeOn && govee.hasLamps()) new Thread(() -> {
+                int cur = govee.currentBrightness();                      // Helligkeit fuer morgen merken
+                if (cur > 0 && !p.getBoolean("govee_dimmed", false)) p.edit().putInt("govee_saved", cur).apply();
+                govee.forget();
+                govee.power(false);
+            }, "goveeNight").start();
+        } else {
+            lightKey = null;
+            if (goveeOn && govee.hasLamps()) {
+                int back = p.getInt("govee_saved", -1);
+                p.edit().putBoolean("govee_dimmed", false).apply();
+                govee.forget();
+                govee.power(true);
+                if (back > 0) govee.brightness(back);
+            }
+            scheduleLights(300);
+        }
+        applyNightLook();
+        if (isFront || fromPhone) toast(on ? "Schlafmodus an · Lichter aus" : "Schlafmodus aus · Lichter wieder automatisch");
+    }
+
+    private void showNightHelp() {
+        List<MItem> items = new ArrayList<>();
+        Runnable again = () -> ui.postDelayed(this::showNightHelp, 150);
+        items.add(new MItem("SO GEHT ES", null));
+        items.add(new MItem("1  Handy-Steuerung per QR-Code öffnen", this::showRemoteQr));
+        items.add(new MItem("2  Unter Schlafmodus auf „Kurzbefehl“ tippen", again));
+        items.add(new MItem("3  iPhone: Kurzbefehle → Automation → Fokus „Schlafen“", again));
+        items.add(new MItem("4  „Wenn aktiviert“: Inhalte von URL abrufen (Link AN)", again));
+        items.add(new MItem("5  „Wenn deaktiviert“: Inhalte von URL abrufen (Link AUS)", again));
+        items.add(new MItem("6  „Sofort ausführen“ wählen, fertig", again));
+        showMenu("iPhone-Kurzbefehl", items);
+    }
+
+    /** Nacht-Ruhebildschirm: Uhr gedimmt, keine Farbflaechen und Lichtpunkte. */
+    private void applyNightLook() {
+        if (saverContent == null) return;
+        saverContent.setAlpha(nightActive ? 0.32f : 1f);
+        for (FrameLayout h : cornerHolders) if (h != null) h.setVisibility(nightActive ? View.INVISIBLE : View.VISIBLE);
+        if (saverDust != null) saverDust.setVisibility(nightActive ? View.INVISIBLE : View.VISIBLE);
+    }
+
     private void openSettingsMenu() {
         List<MItem> items = new ArrayList<>();
+        items.add(new MItem("SCHLAFMODUS", null));
+        items.add(new MItem("Schlafmodus per iPhone  ·  " + (nightFeature() ? "an" : "aus"), () -> {
+            boolean n = !nightFeature();
+            getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean("night_feature", n).apply();
+            if (!n && nightActive) setNight(false, false);
+            toast(n ? "Schlafmodus per iPhone an" : "Schlafmodus per iPhone aus – Kurzbefehle werden ignoriert");
+        }));
+        if (nightFeature()) {
+            items.add(new MItem("Schlafmodus jetzt  ·  " + (nightActive ? "an" : "aus"), () -> setNight(!nightActive, false)));
+            items.add(new MItem("iPhone-Kurzbefehl einrichten  ·  Anleitung", this::showNightHelp));
+        }
         items.add(new MItem("LICHT", null));
         items.add(new MItem("WiZ hinter dem Fernseher  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
         items.add(new MItem("Govee im Raum  ·  " + (goveeOn ? "dimmt beim Streaming" : "aus"), this::openGoveeMenu));
@@ -2329,6 +2400,7 @@ public class MainActivity extends Activity {
         // alte Versionen hatten Modi (app/cover/cinema) -> jeder davon wird zu "Automatisch"
         String old = p.getString("wiz_mode", null);
         wizOn = p.getBoolean(KEY_WIZ_ON, old != null && !"off".equals(old));
+        nightActive = p.getBoolean("night", false) && p.getBoolean("night_feature", true);   // nach Neustart weiter
         wizIps.clear();
         for (String s : p.getString(KEY_WIZ_IPS, "").split(",")) if (!s.isEmpty()) wizIps.add(s);
         wiz.setLamps(wizIps);
@@ -2726,6 +2798,7 @@ public class MainActivity extends Activity {
     private final Runnable videoLights = new Runnable() {
         @Override public void run() {
             if (ambientLayer == null || ambientTexture == null) return;
+            if (nightActive) { ui.postDelayed(this, 1000); return; }   // Schlafmodus: Szene ohne Licht
             try {
                 if (vlBitmap == null) vlBitmap = Bitmap.createBitmap(48, 27, Bitmap.Config.ARGB_8888);
                 Bitmap b = ambientTexture.getBitmap(vlBitmap);
@@ -2891,7 +2964,7 @@ public class MainActivity extends Activity {
         else if (vendor == 0x054C) { kind = "PlayStation-Controller"; col = 0xFF0070D1; }
         else { kind = "Controller"; col = C_GAMING; }
         // Licht leuchtet einmal in der Controller-Farbe auf
-        if (wizOn && wiz.hasLamps() && lightManual == null && ambientLayer == null) {
+        if (wizOn && wiz.hasLamps() && lightManual == null && ambientLayer == null && !nightActive) {
             lightFlashUntil = now + 1400;
             wiz.restore("{\"state\":true,\"r\":" + Color.red(col) + ",\"g\":" + Color.green(col) + ",\"b\":" + Color.blue(col) + ",\"dimming\":100}");
             ui.postDelayed(() -> { lightKey = null; scheduleLights(0); }, 1500);
@@ -2920,6 +2993,10 @@ public class MainActivity extends Activity {
     }
 
     private void applyLightsNow() {
+        if (nightActive) {                         // Schlafmodus: alle Lichter bleiben aus, auch in Apps (keine Sync Box)
+            if (!"night".equals(lightKey)) { lightKey = "night"; ui.removeCallbacks(resendSync); wiz.cancel(); if (wiz.hasLamps()) wiz.off(); }
+            return;
+        }
         if (ambientLayer != null || android.os.SystemClock.uptimeMillis() < lightFlashUntil) return;   // Video-Szene (Sync Box) / Aufleuchten
         if (lightManual != null) {
             if (lightManual.equals(lightManualSent)) return;
@@ -3092,6 +3169,13 @@ public class MainActivity extends Activity {
                     if (sv) ui.postDelayed(() -> { hideMenu(); showSaver.run(); }, 600);
                 });
                 return null;
+            }
+            case "night": {                         // iPhone-Kurzbefehl: Fokus "Schlafen" an/aus
+                String on = q.get("on");
+                final boolean want = "toggle".equals(on) ? !nightActive : "1".equals(on) || "true".equals(on);
+                if (!nightFeature()) return "{\"ok\":false,\"reason\":\"Schlafmodus ist in CleanHome ausgeschaltet\"}";
+                ui.post(() -> setNight(want, true));
+                return "{\"ok\":true,\"night\":" + want + "}";
             }
             case "pc": {
                 if (!pcMac().isEmpty()) new Thread(() -> { for (int i = 0; i < 3; i++) sendWol(pcMac(), pcIp()); }).start();
@@ -3841,6 +3925,7 @@ public class MainActivity extends Activity {
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
         saver.animate().alpha(1f).setDuration(900).withEndAction(() -> { hideUnderSaver(); eqVisibilityCheck(); }).start();
         wizSaver(true);
+        applyNightLook();
         saverContent.setTranslationX(0);          // alles bleibt ruhig in der Mitte
         saverContent.setTranslationY(0);
         ui.removeCallbacks(this.driftTick);
@@ -4066,7 +4151,7 @@ public class MainActivity extends Activity {
 
     /** Die Lampen uebernehmen die Ecken-Farben (Lampe 1 = oben links, 2 = oben rechts, ...). */
     private void sendSaverLights() {
-        if (lightManual != null || !wizOn || !wiz.hasLamps()) return;
+        if (nightActive || lightManual != null || !wizOn || !wiz.hasLamps()) return;
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         int dim = (h >= 23 || h < 6) ? 25 : 45;
         lightKey = "saver" + cornerStep;           // beim Verlassen wird sicher neu gesendet

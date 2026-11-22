@@ -65,6 +65,12 @@ button.pri{background:#ededed;color:#000;border-color:#ededed;font-weight:600}
  <button onclick="api('saver',{},'Ruhebildschirm')">☾ Ruhe</button>
  <button onclick="api('pc',{},'PC wird geweckt')">🖥 PC an</button>
 </div>
+<div class="lbl">SCHLAFMODUS</div>
+<div class="row c3">
+ <button onclick="api('night',{on:'1'},'Schlafmodus an · Lichter aus')">☾ An</button>
+ <button onclick="api('night',{on:'0'},'Schlafmodus aus')">Aus</button>
+ <button onclick="copyNight()">Kurzbefehl</button>
+</div>
 <div class="lbl">APPS</div>
 <div class="apps" id="apps"></div>
 </div><div id="toast"></div>
@@ -72,6 +78,10 @@ button.pri{background:#ededed;color:#000;border-color:#ededed;font-weight:600}
 const K=new URLSearchParams(location.search).get('k')||'';
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),1400)}
 async function api(c,p={},msg){p.k=K;try{const r=await fetch('/api/'+c+'?'+new URLSearchParams(p));const j=await r.json();if(msg)toast(msg);if(navigator.vibrate)navigator.vibrate(12);return j}catch(e){toast('Keine Verbindung zum Stick')}}
+function copyNight(){const on=location.origin+'/api/night?on=1&k='+K,off=location.origin+'/api/night?on=0&k='+K;
+ const t='Fokus Schlafen AN:\n'+on+'\n\nFokus Schlafen AUS:\n'+off;
+ if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(t).then(()=>toast('Links kopiert'))}
+ else{prompt('Links für den iPhone-Kurzbefehl (kopieren):',t)}}
 function hex(c){return '#'+(c&0xFFFFFF).toString(16).padStart(6,'0')}
 async function loadApps(){const j=await api('apps');if(!j)return;const box=document.getElementById('apps');box.innerHTML='';
  j.apps.forEach(a=>{const b=document.createElement('button');b.className='app';
