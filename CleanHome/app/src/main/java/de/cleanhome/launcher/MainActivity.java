@@ -123,6 +123,13 @@ public class MainActivity extends Activity {
     private static final int AMBER = 0xFFF5A524;
     private static final int RED = 0xFFF2555A;
     private static final int BLUE = 0xFF0A72EF;
+    // Einheitliches Design: drei Eckenrundungen und ein dunkler Glas-Stil fuer alle Fenster
+    private static final int R_S = 8, R_M = 12, R_L = 20;          // Menuepunkte/Knoepfe · Kacheln/Karten · Fenster
+    private static final int GLASS_FILL = 0xC70A0A0A;              // schwarz getoent, leicht durchscheinend
+    private static final int GLASS_LINE = 0x1FFFFFFF;
+    private static final int GLASS_SEL = 0x1AFFFFFF;
+    private static final int GLASS_TINT = 0x8C000000;              // Abdunkelung ueber dem verschwommenen Hintergrund
+    private static final int FOCUS_LINE = 0xF2FFFFFF;
 
     // ---------------------------------------------------------------- Daten
     static class AppInfo {
@@ -496,7 +503,7 @@ public class MainActivity extends Activity {
 
         toastView = tv(15, WHITE, fRegular);
         toastView.setPadding(dp(22), dp(11), dp(22), dp(11));
-        toastView.setBackground(rounded(0xF20A0A0A, BORDER, 24));
+        toastView.setBackground(rounded(0xE60A0A0A, GLASS_LINE, R_L));   // dunkles Glas
         toastView.setAlpha(0f);
         toastView.setVisibility(View.GONE);
         FrameLayout.LayoutParams tl = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -646,12 +653,88 @@ public class MainActivity extends Activity {
         return d;
     }
 
+    // ---- Einheitlicher Fokus-Stil: heller Rahmen, leichte Vergroesserung, Glanz (wie bei den Kacheln)
+    private final class Sheen extends Drawable {
+        private float p = -1f;
+        private final float r;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final android.graphics.Path clip = new android.graphics.Path();
+        private ValueAnimator anim;
+
+        Sheen(int radiusDp) { r = dp(radiusDp); }
+
+        void play() {
+            stop();
+            anim = ValueAnimator.ofFloat(0f, 1f);
+            anim.setStartDelay(90);
+            anim.setDuration(620);
+            anim.setInterpolator(new AccelerateDecelerateInterpolator());
+            anim.addUpdateListener(x -> { p = (float) x.getAnimatedValue(); invalidateSelf(); });
+            anim.addListener(new android.animation.AnimatorListenerAdapter() {
+                @Override public void onAnimationEnd(android.animation.Animator x) { p = -1f; invalidateSelf(); }
+            });
+            anim.start();
+        }
+
+        void stop() {
+            if (anim != null) anim.cancel();
+            p = -1f;
+            invalidateSelf();
+        }
+
+        @Override public void draw(Canvas c) {
+            if (p < 0f) return;
+            android.graphics.Rect b = getBounds();
+            if (b.width() <= 0) return;
+            float bw = Math.max(dp(36), b.width() * 0.22f);
+            float x = b.left - bw - b.height() * 0.35f + (b.width() + bw * 2 + b.height() * 0.35f) * p;
+            clip.reset();
+            clip.addRoundRect(new android.graphics.RectF(b), r, r, android.graphics.Path.Direction.CW);
+            c.save();
+            c.clipPath(clip);
+            c.skew(-0.35f, 0f);
+            paint.setShader(new LinearGradient(x, 0, x + bw, 0,
+                    new int[]{0x00FFFFFF, 0x30FFFFFF, 0x00FFFFFF}, null, Shader.TileMode.CLAMP));
+            c.drawRect(x, b.top, x + bw + b.height(), b.bottom, paint);
+            c.restore();
+        }
+
+        @Override public void setAlpha(int a) { }
+        @Override public void setColorFilter(android.graphics.ColorFilter cf) { }
+        @Override public int getOpacity() { return android.graphics.PixelFormat.TRANSLUCENT; }
+    }
+
+    /**
+     * Gibt einer Bedienfläche den gemeinsamen Fokus-Look.
+     * @param bg   Hintergrund der Fläche (Farbe wechselt zwischen idle und focus)
+     * @param more zusätzliche Aktion bei Fokuswechsel (darf null sein)
+     */
+    private void focusStyle(View v, GradientDrawable bg, int radiusDp, float scale, int idleFill, int focusFill,
+                            View.OnFocusChangeListener more) {
+        GradientDrawable frame = new GradientDrawable();
+        frame.setCornerRadius(dp(radiusDp));
+        frame.setColor(0x00000000);
+        Sheen sheen = new Sheen(radiusDp);
+        boolean fgOk = Build.VERSION.SDK_INT >= 23;
+        if (fgOk) v.setForeground(new android.graphics.drawable.LayerDrawable(new Drawable[]{frame, sheen}));
+        bg.setColor(idleFill);
+        v.setOnFocusChangeListener((view, has) -> {
+            bg.setColor(has ? focusFill : idleFill);
+            if (fgOk) frame.setStroke(has ? dp(2) : 0, FOCUS_LINE);
+            else bg.setStroke(has ? dp(2) : 0, FOCUS_LINE);
+            view.animate().scaleX(has ? scale : 1f).scaleY(has ? scale : 1f)
+                    .setDuration(LITE ? 140 : 200).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+            if (has && !navRepeat && fgOk) sheen.play(); else sheen.stop();
+            if (more != null) more.onFocusChange(view, has);
+        });
+    }
+
     private TextView badge(String s) {
         TextView t = tv(10, GRAY_1, fMono);
         t.setText(s);
         t.setLetterSpacing(0.08f);
         t.setPadding(dp(8), dp(3), dp(8), dp(3));
-        t.setBackground(rounded(0xFF111111, BORDER, 20));
+        t.setBackground(rounded(0xFF111111, BORDER, R_L));
         return t;
     }
 
@@ -661,21 +744,19 @@ public class MainActivity extends Activity {
         t.setGravity(Gravity.CENTER);
         t.setMinWidth(dp(26));
         t.setPadding(dp(6), dp(3), dp(6), dp(3));
-        t.setBackground(rounded(0xFF161616, BORDER, 6));
+        t.setBackground(rounded(0xFF161616, BORDER, R_S));
         return t;
     }
 
     private TextView button(String s) {
-        TextView t = tv(13, BLACK, fMedium);
+        TextView t = tv(13, WHITE, fMedium);
         t.setText(s);
         t.setPadding(dp(16), dp(8), dp(16), dp(8));
         t.setFocusable(true);
         t.setClickable(true);
-        GradientDrawable d = rounded(WHITE, 0, 8);
+        GradientDrawable d = rounded(0xFF161616, BORDER, R_S);
         t.setBackground(d);
-        t.setOnFocusChangeListener((v, has) -> {
-            d.setStroke(has ? dp(2) : 0, BLUE);
-            v.animate().scaleX(has ? 1.06f : 1f).scaleY(has ? 1.06f : 1f).setDuration(140).start();
+        focusStyle(t, d, R_S, 1.06f, 0xFF161616, 0xFF262626, (v, has) -> {
             if (has) setHero("Einstellungen", "home · system", BLUE);
         });
         return t;
@@ -1328,7 +1409,7 @@ public class MainActivity extends Activity {
         t.setAlpha(LITE ? 1f : 0.8f);
 
         final boolean moving = a.pkg.equals(movingPkg) && rowId.equals(movingRow);
-        int radius = big ? 12 : 10;
+        int radius = R_M;
         t.setBackground(rounded(SURFACE, 0, radius));
 
         if (a.banner != null) {
@@ -1378,7 +1459,7 @@ public class MainActivity extends Activity {
         }
 
         t.setOnFocusChangeListener((v, has) -> {
-            if (!moving) fg.setStroke(has ? dp(2) : dp(1), has ? 0xFFFFFFFF : BORDER);
+            if (!moving) fg.setStroke(has ? dp(2) : dp(1), has ? FOCUS_LINE : BORDER);
             v.animate().cancel();
             sheen.animate().cancel();
             sheen.setVisibility(View.INVISIBLE);
@@ -1552,13 +1633,13 @@ public class MainActivity extends Activity {
             if ("1".equals(fs[2])) items.add(new MItem(fs[0] + "   ↗ über Amazon", this::openSystemSettings));
             else items.add(new MItem(fs[0], () -> openFireSettings(fs[1])));
         }
-        items.add(new MItem("⬆  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
-        items.add(new MItem("🩺  Diagnose (Ruhebildschirm, letzter Fehler)", this::showDiagnose));
+        items.add(new MItem("↑  Nach Updates suchen  ·  Version " + Updater.installedVersion(this), () -> checkUpdate(true)));
+        items.add(new MItem("Diagnose (Ruhebildschirm, letzter Fehler)", this::showDiagnose));
         items.add(new MItem("STIMMUNG", null));
-        items.add(new MItem("🔥  Kaminfeuer", () -> openAmbient(0)));
-        items.add(new MItem("⛈  Gewitter am Fenster", () -> openAmbient(1)));
-        items.add(new MItem("✦  Sternenhimmel", () -> openAmbient(2)));
-        items.add(new MItem("🌌  Nordlicht", () -> openAmbient(3)));
+        items.add(new MItem("Kaminfeuer", () -> openAmbient(0)));
+        items.add(new MItem("Gewitter am Fenster", () -> openAmbient(1)));
+        items.add(new MItem("Sternenhimmel", () -> openAmbient(2)));
+        items.add(new MItem("Nordlicht", () -> openAmbient(3)));
         items.add(new MItem("SPEICHER", null));
         items.add(new MItem("RAM jetzt freimachen", () -> freeRam(null, false)));
         items.add(new MItem("Vor jedem App-Start freimachen  ·  " + (autoRam() ? "an" : "aus"), () -> {
@@ -1567,7 +1648,7 @@ public class MainActivity extends Activity {
             toast(n ? "RAM wird vor jedem App-Start freigemacht" : "Automatisches Freimachen aus");
         }));
         items.add(new MItem("CLEANHOME", null));
-        items.add(new MItem("📱  Handy-Steuerung (QR-Code)", this::showRemoteQr));
+        items.add(new MItem("Handy-Steuerung (QR-Code)", this::showRemoteQr));
         items.add(new MItem("Ausgeblendete Apps (" + hidden.size() + ")", this::openHiddenMenu));
         items.add(new MItem("WiZ-Licht  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
         items.add(new MItem("Govee-Licht  ·  " + (goveeOn ? "dimmt bei Streaming" : "aus"), this::openGoveeMenu));
@@ -1593,15 +1674,14 @@ public class MainActivity extends Activity {
         showMenu("Ausgeblendete Apps", items);
     }
 
-    // ---- Glas-Menue: verschwommenes, abgedunkeltes Abbild des Home Screens hinter dem Menue
+    // ---- Glas-Look: verschwommenes, abgedunkeltes Abbild des Home Screens hinter Fenstern
     private boolean glassOn;
 
-    private void applyGlass() {
-        if (menuLayer.getVisibility() == View.VISIBLE) return;          // Untermenue: Glas bleibt
-        glassOn = false;
+    /** Verschwommener Hintergrund fuer ein Fenster (vor dem Einblenden aufrufen), sonst null. */
+    private Drawable glassBackdrop() {
         try {
             int rw = root.getWidth(), rh = root.getHeight();
-            if (rw <= 0 || rh <= 0) return;
+            if (rw <= 0 || rh <= 0) return null;
             int w = Math.max(16, rw / 12), h = Math.max(9, rh / 12);   // winzig rechnen, gross weichzeichnen
             Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
             Canvas c = new Canvas(b);
@@ -1613,12 +1693,18 @@ public class MainActivity extends Activity {
             boxBlur(b, 2);
             android.graphics.drawable.BitmapDrawable bd = new android.graphics.drawable.BitmapDrawable(getResources(), b);
             bd.setFilterBitmap(true);
-            menuLayer.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{
-                    bd, new android.graphics.drawable.ColorDrawable(0x80000000)}));
-            glassOn = true;
+            return new android.graphics.drawable.LayerDrawable(new Drawable[]{
+                    bd, new android.graphics.drawable.ColorDrawable(GLASS_TINT)});
         } catch (Throwable e) {
-            menuLayer.setBackgroundColor(0xB3000000);
+            return null;
         }
+    }
+
+    private void applyGlass() {
+        if (menuLayer.getVisibility() == View.VISIBLE) return;          // Untermenue: Glas bleibt
+        Drawable d = glassBackdrop();
+        glassOn = d != null;
+        if (d != null) menuLayer.setBackground(d); else menuLayer.setBackgroundColor(0xB3000000);
     }
 
     /** Schneller Box-Weichzeichner (horizontal + vertikal) fuer kleine Bitmaps. */
@@ -1654,12 +1740,12 @@ public class MainActivity extends Activity {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(6), dp(6), dp(6), dp(6));
         if (glassOn) {                                  // milchiges Glas statt schwarzer Flaeche
-            panel.setBackground(rounded(0x24FFFFFF, 0x38FFFFFF, 14));
+            panel.setBackground(rounded(GLASS_FILL, GLASS_LINE, R_L));   // dunkles Glas
         } else {
-            panel.setBackground(rounded(SURFACE, BORDER, 12));
+            panel.setBackground(rounded(SURFACE, BORDER, R_L));
             if (Build.VERSION.SDK_INT >= 21) panel.setElevation(dp(24));
         }
-        final int selBg = glassOn ? 0x2EFFFFFF : 0xFF1F1F1F;
+        final int selBg = glassOn ? GLASS_SEL : 0xFF1F1F1F;
 
         TextView head = tv(11, glassOn ? 0xFFA6A6A6 : GRAY_2, fMono);
         head.setText(title.toUpperCase(Locale.GERMANY));
@@ -1684,12 +1770,10 @@ public class MainActivity extends Activity {
             t.setPadding(dp(12), dp(11), dp(16), dp(11));
             t.setFocusable(true);
             t.setClickable(true);
-            GradientDrawable bg = rounded(0x00000000, 0, 8);
+            GradientDrawable bg = rounded(0x00000000, 0, R_S);
             t.setBackground(bg);
-            t.setOnFocusChangeListener((v, has) -> {
-                bg.setColor(has ? selBg : 0x00000000);
-                t.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD));
-            });
+            focusStyle(t, bg, R_S, 1.02f, 0x00000000, selBg, (v, has) ->
+                    t.setTextColor(has ? (mi.danger ? RED : 0xFFFFFFFF) : (mi.danger ? 0xCCF2555A : 0xFFBDBDBD)));
             t.setTextColor(mi.danger ? 0xCCF2555A : 0xFFBDBDBD);
             t.setOnClickListener(v -> {
                 hideMenuQuiet();
@@ -1910,6 +1994,10 @@ public class MainActivity extends Activity {
         pcHeadline.setText("Gaming-PC wird gestartet");
         pcFoot.setText("Zurück = abbrechen");
         pcFoot.setTextColor(GRAY_2);
+        if (pcLayer.getVisibility() != View.VISIBLE) {
+            Drawable gd = glassBackdrop();
+            if (gd != null) pcLayer.setBackground(gd); else pcLayer.setBackgroundColor(0xD9000000);
+        }
         pcLayer.setAlpha(0f);
         pcLayer.setVisibility(View.VISIBLE);
         pcLayer.animate().alpha(1f).setDuration(200).start();
@@ -1923,7 +2011,7 @@ public class MainActivity extends Activity {
 
     private void buildPcLayer() {
         pcLayer = new FrameLayout(this);
-        pcLayer.setBackgroundColor(0xD9000000);
+        pcLayer.setBackgroundColor(0xD9000000);           // beim Einblenden durch Glas ersetzt
         pcLayer.setClickable(true);
         pcLayer.setVisibility(View.GONE);
 
@@ -1931,9 +2019,9 @@ public class MainActivity extends Activity {
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(28), dp(24), dp(28), dp(22));
         GradientDrawable bg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{0x337C3AED, SURFACE, SURFACE});
-        bg.setCornerRadius(dp(14));
-        bg.setStroke(dp(1), BORDER);
+                new int[]{0x407C3AED, GLASS_FILL, GLASS_FILL});
+        bg.setCornerRadius(dp(R_L));
+        bg.setStroke(dp(1), GLASS_LINE);
         card.setBackground(bg);
 
         TextView tag = tv(11, GRAY_2, fMono);
@@ -1977,7 +2065,7 @@ public class MainActivity extends Activity {
             switch (state) {
                 case "done": pcStepDot[i].setText("✓"); pcStepDot[i].setTextColor(GREEN); pcStepText[i].setTextColor(WHITE); break;
                 case "run":  pcStepDot[i].setText("●"); pcStepDot[i].setTextColor(C_GAMING); pcStepText[i].setTextColor(WHITE); break;
-                case "fail": pcStepDot[i].setText("✕"); pcStepDot[i].setTextColor(RED); pcStepText[i].setTextColor(WHITE); break;
+                case "fail": pcStepDot[i].setText("✗"); pcStepDot[i].setTextColor(RED); pcStepText[i].setTextColor(WHITE); break;
                 default:     pcStepDot[i].setText("○"); pcStepDot[i].setTextColor(GRAY_2); pcStepText[i].setTextColor(GRAY_2);
             }
             pcStepInfo[i].setText(info);
@@ -2051,7 +2139,7 @@ public class MainActivity extends Activity {
         }
         if (!ip.isEmpty()) {
             items.add(new MItem("▶  Jetzt starten", this::startPcGaming));
-            items.add(new MItem("⚡  WOL-Test senden", () -> {
+            items.add(new MItem("WOL-Test senden", () -> {
                 new Thread(() -> sendWol(pcMac(), pcIp())).start();
                 toast("Magic Packet gesendet");
             }));
@@ -2431,7 +2519,7 @@ public class MainActivity extends Activity {
         final int v = updatePending;
         updatePending = -1;
         List<MItem> items = new ArrayList<>();
-        items.add(new MItem("⬆  Jetzt installieren", () -> runUpdate(v)));
+        items.add(new MItem("↑  Jetzt installieren", () -> runUpdate(v)));
         items.add(new MItem("Später", () -> { }));
         showMenu("Neue CleanHome-Version " + v + " verfügbar (installiert: " + Updater.installedVersion(this) + ")", items);
     }
@@ -2695,7 +2783,7 @@ public class MainActivity extends Activity {
             wiz.restore("{\"state\":true,\"r\":" + Color.red(col) + ",\"g\":" + Color.green(col) + ",\"b\":" + Color.blue(col) + ",\"dimming\":100}");
             ui.postDelayed(() -> { lightKey = null; scheduleLights(0); }, 1500);
         }
-        if (!isFront) { toast("🎮 " + kind + " verbunden"); return; }   // in einer App: nicht dazwischenfunken
+        if (!isFront) { toast(kind + " verbunden"); return; }   // in einer App: nicht dazwischenfunken
         if (ambientLayer != null) closeAmbient();
         hideSaver();
         // in die Reihe PC-Spiele springen (oder auf die PC-Kachel)
@@ -2715,7 +2803,7 @@ public class MainActivity extends Activity {
             }
         }
         items.add(new MItem("Nicht jetzt", () -> { }));
-        showMenu("🎮  " + kind + " verbunden – PC starten?", items);
+        showMenu(kind + " verbunden – PC starten?", items);
     }
 
     private void applyLightsNow() {
@@ -2923,11 +3011,14 @@ public class MainActivity extends Activity {
         if (qrLayer != null) { root.removeView(qrLayer); qrLayer = null; }
         String url = remoteUrl();
         FrameLayout l = new FrameLayout(this);
-        l.setBackgroundColor(0xF2000000);
+        Drawable gd = glassBackdrop();
+        if (gd != null) l.setBackground(gd); else l.setBackgroundColor(0xF2000000);
         l.setClickable(true);
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setGravity(Gravity.CENTER_HORIZONTAL);
+        box.setPadding(dp(40), dp(32), dp(40), dp(28));
+        box.setBackground(rounded(GLASS_FILL, GLASS_LINE, R_L));       // dunkles Glas-Fenster
         TextView h = tv(30, WHITE, fBold);
         h.setText("Handy-Steuerung");
         box.addView(h);
@@ -2948,7 +3039,7 @@ public class MainActivity extends Activity {
             qr.setImageDrawable(bd);
         } catch (Exception e) { qr.setBackgroundColor(0xFF333333); }
         qr.setScaleType(ImageView.ScaleType.FIT_CENTER);
-        qr.setBackground(rounded(0xFFFFFFFF, 0xFFFFFFFF, 14));
+        qr.setBackground(rounded(0xFFFFFFFF, 0xFFFFFFFF, R_M));
         qr.setPadding(dp(14), dp(14), dp(14), dp(14));
         box.addView(qr, new LinearLayout.LayoutParams(dp(300), dp(300)));
         TextView u = tv(14, GRAY_2, fMono);
@@ -3193,14 +3284,14 @@ public class MainActivity extends Activity {
         card.setGravity(Gravity.CENTER_VERTICAL);
         card.setPadding(dp(14), dp(14), dp(18), dp(14));
         npBg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{0x400A72EF, SURFACE, SURFACE});
-        npBg.setCornerRadius(dp(14));
+        npBg.setCornerRadius(dp(R_M));
         npBg.setStroke(dp(1), BORDER);
         card.setBackground(npBg);
         npSection.addView(card, new LinearLayout.LayoutParams(-1, -2));
 
         npArt = new ImageView(this);
         npArt.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        npArt.setBackground(rounded(0xFF161616, 0, 10));
+        npArt.setBackground(rounded(0xFF161616, 0, R_M));
         npArt.setClipToOutline(true);
         card.addView(npArt, new LinearLayout.LayoutParams(dp(84), dp(84)));
 
@@ -3311,14 +3402,11 @@ public class MainActivity extends Activity {
         t.setGravity(Gravity.CENTER);
         t.setFocusable(true);
         t.setClickable(true);
-        GradientDrawable d = rounded(0xFF161616, BORDER, 24);
+        GradientDrawable d = rounded(0xFF161616, BORDER, R_L);
         t.setBackground(d);
         t.setMinWidth(dp(54));
         t.setPadding(dp(14), dp(12), dp(14), dp(12));
-        t.setOnFocusChangeListener((v, has) -> {
-            d.setColor(has ? 0xFFFFFFFF : 0xFF161616);
-            t.setTextColor(has ? BLACK : WHITE);
-            v.animate().scaleX(has ? 1.1f : 1f).scaleY(has ? 1.1f : 1f).setDuration(140).start();
+        focusStyle(t, d, R_L, 1.08f, 0xFF161616, 0xFF262626, (v, has) -> {
             if (has) {
                 setHero(String.valueOf(npTitle.getText()), npCtrl != null ? npCtrl.getPackageName() : "", npColor);
                 heroHint.setText("  Optionen");
@@ -3951,11 +4039,11 @@ public class MainActivity extends Activity {
         pills.setGravity(Gravity.CENTER);
         sWeather = tv(15, WHITE, fMono);
         sWeather.setPadding(dp(16), dp(9), dp(16), dp(9));
-        sWeather.setBackground(rounded(0x99111111, 0x33FFFFFF, 22));
+        sWeather.setBackground(rounded(0x99111111, GLASS_LINE, R_L));
         pills.addView(sWeather);
         saverMusic = tv(15, WHITE, fMono);
         saverMusic.setPadding(dp(16), dp(9), dp(16), dp(9));
-        saverMusic.setBackground(rounded(0x99111111, 0x33FFFFFF, 22));
+        saverMusic.setBackground(rounded(0x99111111, GLASS_LINE, R_L));
         saverMusic.setMaxWidth(dp(420));
         saverMusic.setSingleLine(true);
         saverMusic.setEllipsize(TextUtils.TruncateAt.END);
@@ -4057,7 +4145,7 @@ public class MainActivity extends Activity {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
         card.setPadding(dp(18), dp(12), dp(20), dp(12));
-        card.setBackground(rounded(0xCC0A0A0A, BORDER, 12));
+        card.setBackground(rounded(GLASS_FILL, GLASS_LINE, R_M));
         card.setMinimumWidth(dp(220));
 
         TextView loc = tv(10, GRAY_2, fMono);
@@ -4320,7 +4408,7 @@ public class MainActivity extends Activity {
         ImageView fx = new ImageView(this);
         fx.setScaleType(ImageView.ScaleType.CENTER_CROP);
         if (a.banner != null) fx.setImageDrawable(a.banner);
-        fx.setBackground(rounded(a.color, 0, 12));
+        fx.setBackground(rounded(a.color, 0, R_M));
         fx.setClipToOutline(true);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(w, h);
         lp.leftMargin = Math.round(x);
