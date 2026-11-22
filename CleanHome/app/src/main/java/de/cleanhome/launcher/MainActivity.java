@@ -2599,7 +2599,12 @@ public class MainActivity extends Activity {
                 if (pc / 25 != last[0]) { last[0] = pc / 25; ui.post(() -> toast("Update wird geladen · " + pc + " %")); }
             });
             ui.post(() -> {
-                if (f == null) { toast("Download fehlgeschlagen – später nochmal versuchen"); return; }
+                if (f == null) {
+                    String why = Updater.lastError != null ? Updater.lastError : "später nochmal versuchen";
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString("update_error", why).apply();
+                    toast("Update nicht geladen: " + why);
+                    return;
+                }
                 toast("Gleich erscheint „Installieren“ – einmal OK drücken");
                 lastLeftByLaunch = System.currentTimeMillis();
                 settingsOpenedAt = System.currentTimeMillis();       // Waechter nicht dazwischenfunken lassen

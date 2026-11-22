@@ -54,34 +54,71 @@ public final class Updater {
         } catch (Exception e) { return -1; }
     }
 
-    /** APK herunterladen und pruefen. Rueckgabe: Datei oder null. Blockiert. */
+    /** Warum der letzte Download nicht geklappt hat (fuer eine verstaendliche Meldung). */
+    public static volatile String lastError;
+
+    /** Frische Kopie ueber die GitHub-API (kein 5-Minuten-Zwischenspeicher wie bei raw.githubusercontent.com). */
+    private static final String APK_API = "https://api.github.com/repos/zcrowdd/cleanhometv/contents/app-debug.apk?ref=apk";
+
+    /** APK herunterladen und pruefen. Rueckgabe: Datei oder null (Grund in lastError). Blockiert. */
     public static File download(Context c, Progress pr) {
+        lastError = null;
+        File f = fetch(c, APK_API, true, pr);
+        int v = f != null ? apkVersion(c, f) : -1;
+        if (f == null || v <= installedVersion(c)) {          // Ausweichweg: direkte Datei
+            File g = fetch(c, APK + "?t=" + System.currentTimeMillis(), false, pr);
+            int gv = g != null ? apkVersion(c, g) : -1;
+            if (gv > v) { f = g; v = gv; }
+        }
+        if (f == null) { if (lastError == null) lastError = "Keine Verbindung zu GitHub"; return null; }
+        if (v < 0) { f.delete(); lastError = "Datei ist keine CleanHome-App"; return null; }
+        if (v <= installedVersion(c)) {
+            f.delete();
+            lastError = "Neue Version wird gerade bereitgestellt – in ein paar Minuten nochmal";
+            return null;
+        }
+        return f;
+    }
+
+    private static int apkVersion(Context c, File f) {
+        try {
+            PackageInfo pi = c.getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
+            if (pi == null || !c.getPackageName().equals(pi.packageName)) return -1;
+            return Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) { return -1; }
+    }
+
+    private static File fetch(Context c, String url, boolean api, Progress pr) {
         File dir = c.getExternalFilesDir("update");
         if (dir == null) dir = c.getCacheDir();
-        File f = new File(dir, "cleanhome.apk");
+        File f = new File(dir, api ? "cleanhome.apk" : "cleanhome-raw.apk");
         try {
-            HttpURLConnection h = (HttpURLConnection) new URL(APK + "?t=" + System.currentTimeMillis()).openConnection();
-            h.setConnectTimeout(10000); h.setReadTimeout(20000);
+            HttpURLConnection h = (HttpURLConnection) new URL(url).openConnection();
+            h.setConnectTimeout(10000); h.setReadTimeout(30000);
             h.setRequestProperty("User-Agent", "CleanHome");
-            if (h.getResponseCode() != 200) return null;
+            h.setRequestProperty("Accept-Encoding", "identity");      // Groesse muss zur Datei passen
+            h.setRequestProperty("Cache-Control", "no-cache");
+            if (api) h.setRequestProperty("Accept", "application/vnd.github.raw");
+            int code = h.getResponseCode();
+            if (code != 200) { lastError = "GitHub antwortet mit Fehler " + code; return null; }
             int len = h.getContentLength();
+            long done = 0;
             try (InputStream in = h.getInputStream(); OutputStream out = new FileOutputStream(f)) {
                 byte[] b = new byte[64 * 1024];
-                long done = 0; int r, lastP = -1;
+                int r, lastP = -1;
                 while ((r = in.read(b)) > 0) {
                     out.write(b, 0, r);
                     done += r;
                     if (len > 0 && pr != null) { int p = (int) (done * 100 / len); if (p != lastP) { lastP = p; pr.percent(p); } }
                 }
             }
-            if (len > 0 && f.length() != len) { f.delete(); return null; }   // abgebrochener Download
-            // nur installieren, wenn es wirklich CleanHome ist und neuer als das installierte
-            PackageInfo pi = c.getPackageManager().getPackageArchiveInfo(f.getAbsolutePath(), 0);
-            if (pi == null || !c.getPackageName().equals(pi.packageName)) return null;
-            int v = Build.VERSION.SDK_INT >= 28 ? (int) pi.getLongVersionCode() : pi.versionCode;
-            if (v <= installedVersion(c)) return null;
+            if (len > 0 && done != len) { f.delete(); lastError = "Download abgebrochen"; return null; }
             return f;
-        } catch (Exception e) { return null; }
+        } catch (Exception e) {
+            f.delete();
+            lastError = "Download unterbrochen (" + e.getClass().getSimpleName() + ")";
+            return null;
+        }
     }
 
     /** Ueber den System-Installer installieren. Android zeigt dann "Installieren?" - einmal OK druecken. */
@@ -130,7 +167,7 @@ public final class Updater {
     public static void cleanup(Context c) {
         try {
             File dir = c.getExternalFilesDir("update");
-            if (dir != null) new File(dir, "cleanhome.apk").delete();
+            if (dir != null) { new File(dir, "cleanhome.apk").delete(); new File(dir, "cleanhome-raw.apk").delete(); }
             new File(c.getCacheDir(), "cleanhome.apk").delete();
         } catch (Exception ignored) { }
     }
