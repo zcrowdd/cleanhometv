@@ -251,6 +251,9 @@ public class MainActivity extends Activity {
         super.onResume();
         dateView.setText(new SimpleDateFormat("EEE, d. MMM", Locale.GERMANY).format(new Date()).toUpperCase(Locale.GERMANY));
         if (appsDirty || apps.isEmpty()) loadApps();   // nur neu laden, wenn sich Apps geaendert haben
+        if (npSection != null && npSection.getVisibility() == View.VISIBLE) { ui.removeCallbacks(npTick); ui.post(npTick); }
+        if (dateView != null) ui.removeCallbacks(dateTick);
+        ui.postDelayed(dateTick, 60_000);
         clearLaunchFx();
         ui.removeCallbacks(weatherTick); ui.post(weatherTick);
         ui.removeCallbacks(netTick); ui.post(netTick);
@@ -291,7 +294,22 @@ public class MainActivity extends Activity {
         hideSaver();
         homeVisible = false;
         scheduleLights(400);
-        for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isRunning()) a.pause();
+        for (android.animation.ObjectAnimator a : eqAnims) if (a != null && a.isStarted()) a.pause();
+        ui.removeCallbacks(npTick);           // Fortschritt nur zaehlen, wenn man ihn sieht
+    }
+
+    /** Wenig Speicher und CleanHome nicht vorne: Kachelbilder freigeben, beim Zurueckkommen neu laden. */
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        if (isFront || level < TRIM_MEMORY_RUNNING_LOW) return;
+        if (saver != null && saver.getVisibility() == View.VISIBLE) return;
+        rowsBox.removeAllViews();
+        allBox.removeAllViews();
+        for (AppInfo a : apps) { a.banner = null; a.icon = null; }
+        resumeApps.clear();
+        vlBitmap = null;
+        appsDirty = true;
     }
 
     @Override
@@ -661,8 +679,14 @@ public class MainActivity extends Activity {
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final android.graphics.Path clip = new android.graphics.Path();
         private ValueAnimator anim;
+        private LinearGradient shader;
+        private float shaderW;
+        private final android.graphics.RectF rect = new android.graphics.RectF();
+        private final android.graphics.Matrix mtx = new android.graphics.Matrix();
 
         Sheen(int radiusDp) { r = dp(radiusDp); }
+
+        @Override protected void onBoundsChange(android.graphics.Rect b) { shader = null; }
 
         void play() {
             stop();
@@ -689,13 +713,19 @@ public class MainActivity extends Activity {
             if (b.width() <= 0) return;
             float bw = Math.max(dp(36), b.width() * 0.22f);
             float x = b.left - bw - b.height() * 0.35f + (b.width() + bw * 2 + b.height() * 0.35f) * p;
-            clip.reset();
-            clip.addRoundRect(new android.graphics.RectF(b), r, r, android.graphics.Path.Direction.CW);
+            if (shader == null || shaderW != bw) {          // Verlauf + Ausschnitt nur bei Groessenaenderung neu
+                shaderW = bw;
+                shader = new LinearGradient(0, 0, bw, 0, new int[]{0x00FFFFFF, 0x30FFFFFF, 0x00FFFFFF}, null, Shader.TileMode.CLAMP);
+                paint.setShader(shader);
+                rect.set(b);
+                clip.reset();
+                clip.addRoundRect(rect, r, r, android.graphics.Path.Direction.CW);
+            }
+            mtx.setTranslate(x, 0);
+            shader.setLocalMatrix(mtx);
             c.save();
             c.clipPath(clip);
             c.skew(-0.35f, 0f);
-            paint.setShader(new LinearGradient(x, 0, x + bw, 0,
-                    new int[]{0x00FFFFFF, 0x30FFFFFF, 0x00FFFFFF}, null, Shader.TileMode.CLAMP));
             c.drawRect(x, b.top, x + bw + b.height(), b.bottom, paint);
             c.restore();
         }
@@ -829,13 +859,25 @@ public class MainActivity extends Activity {
                         .remove(i.getData().getSchemeSpecificPart()).apply();
             }
             appsDirty = true;
-            if (isFront) loadApps();
+            if (isFront) { ui.removeCallbacks(reloadApps); ui.postDelayed(reloadApps, 1500); }   // Update = 3-4 Signale
         }
     };
+    private final Runnable reloadApps = this::loadApps;
+    private final int[] vlPx = new int[48 * 27];
+    /** Datum oben jede Minute aktualisieren (CleanHome kann tagelang vorne bleiben). */
+    private final Runnable dateTick = new Runnable() {
+        @Override public void run() {
+            if (dateView != null) dateView.setText(new SimpleDateFormat("EEE, d. MMM", Locale.GERMANY).format(new Date()).toUpperCase(Locale.GERMANY));
+            if (isFront) ui.postDelayed(this, 60_000);
+        }
+    };
+    private final java.util.concurrent.atomic.AtomicBoolean appsLoading = new java.util.concurrent.atomic.AtomicBoolean();
 
     private void loadApps() {
+        if (!appsLoading.compareAndSet(false, true)) { appsDirty = true; return; }   // laeuft schon -> danach erneut
         appsDirty = false;
         new Thread(() -> {
+          try {
             PackageManager pm = getPackageManager();
             Map<String, AppInfo> map = new LinkedHashMap<>();
             collect(pm, Intent.CATEGORY_LEANBACK_LAUNCHER, map);
@@ -862,7 +904,10 @@ public class MainActivity extends Activity {
                 render(null, null);
                 if (junk > 0) toast(junk + (junk == 1 ? " unnötige App" : " unnötige Apps")
                         + " ausgeblendet · zurückholen: Einstellungen → Ausgeblendete Apps");
+                appsLoading.set(false);
+                if (appsDirty && isFront) { ui.removeCallbacks(reloadApps); ui.postDelayed(reloadApps, 500); }
             });
+          } catch (Throwable t) { appsLoading.set(false); }
         }).start();
     }
 
@@ -878,7 +923,7 @@ public class MainActivity extends Activity {
                     .setClassName(pkg, ri.activityInfo.name)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
             try { a.banner = scaledBanner(ri.activityInfo.loadBanner(pm)); } catch (Exception ignored) { }
-            try { a.icon = ri.loadIcon(pm); } catch (Exception ignored) { }
+            if (a.banner == null) try { a.icon = ri.loadIcon(pm); } catch (Exception ignored) { }   // Icon nur als Ersatz
             SharedPreferences cp = getSharedPreferences("colors", MODE_PRIVATE);
             if (cp.contains(pkg)) a.color = cp.getInt(pkg, BLUE);
             else {
@@ -1202,7 +1247,7 @@ public class MainActivity extends Activity {
 
     /** Nur die Weiterschauen-Reihe neu fuellen statt die ganze Startseite neu aufzubauen. */
     private void updateResumeRow() {
-        if (!isFront || !homeVisible) return;                     // beim naechsten Zurueckkommen wird ohnehin gezeichnet
+        if (rows == null || !isFront || !homeVisible) return;                     // beim naechsten Zurueckkommen wird ohnehin gezeichnet
         if (resumeLine == null || resumeApps.isEmpty()) { render(null, null); return; }   // Reihe entsteht/verschwindet
         View f = getCurrentFocus();
         int focusIdx = f != null && f.getParent() == resumeLine ? resumeLine.indexOfChild(f) : -1;
@@ -1293,6 +1338,7 @@ public class MainActivity extends Activity {
     // ================================================================ Darstellen
 
     private void render(String focusRow, String focusPkg) {
+        if (rows == null) return;                 // erste App-Liste noch nicht geladen
         String keep = null;
         View cf = getCurrentFocus();
         if (focusPkg == null && cf != null && cf.getTag() instanceof String) keep = (String) cf.getTag();
@@ -1998,10 +2044,11 @@ public class MainActivity extends Activity {
                 for (int k = 0; k < 3; k++) sendWol(mac, ip);
                 pcStep(0, "done", "Magic Packet → " + mac);
                 pcStep(1, "run", "0 s");
+                long lastWol = System.currentTimeMillis();
                 while (!pcCancel && System.currentTimeMillis() - t0 < 120_000) {
                     if (isPcOnline(ip, 1500)) { on = true; break; }
                     long sec = (System.currentTimeMillis() - t0) / 1000;
-                    if (sec % 10 == 0) sendWol(mac, ip);
+                    if (System.currentTimeMillis() - lastWol >= 10_000) { sendWol(mac, ip); lastWol = System.currentTimeMillis(); }
                     pcStep(1, "run", sec + " s");
                     try { Thread.sleep(1000); } catch (InterruptedException ignored) { }
                 }
@@ -2487,7 +2534,11 @@ public class MainActivity extends Activity {
     // ================================================================ Absturz-Protokoll + Ruhebildschirm-Einstellungen
 
     /** Stuerzt CleanHome ab, wird der Grund gespeichert (Einstellungen -> "Letzter Fehler"). */
+    private static boolean crashLoggerOn;
+
     private void installCrashLogger() {
+        if (crashLoggerOn) return;            // Prozess lebt laenger als die Activity -> nicht mehrfach verketten
+        crashLoggerOn = true;
         final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
         Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
             try {
@@ -2680,8 +2731,8 @@ public class MainActivity extends Activity {
                 Bitmap b = ambientTexture.getBitmap(vlBitmap);
                 if (b != null) {
                     double sr = 0, sg = 0, sb = 0, sw = 0; int maxL = 0;
-                    for (int y = 0; y < 27; y++) for (int x = 0; x < 48; x++) {
-                        int c = b.getPixel(x, y);
+                    b.getPixels(vlPx, 0, 48, 0, 0, 48, 27);
+                    for (int c : vlPx) {
                         int r = (c >> 16) & 255, g = (c >> 8) & 255, bl = c & 255;
                         int lum = (r * 3 + g * 6 + bl) / 10;
                         if (lum > maxL) maxL = lum;
@@ -3331,7 +3382,7 @@ public class MainActivity extends Activity {
     private final Runnable npTick = new Runnable() {
         @Override public void run() {
             updateProgress();
-            if (npSection.getVisibility() == View.VISIBLE) ui.postDelayed(this, 1000);
+            if (isFront && npSection.getVisibility() == View.VISIBLE) ui.postDelayed(this, 1000);
         }
     };
 
@@ -3456,6 +3507,7 @@ public class MainActivity extends Activity {
                 eqBars[i].setScaleY(0.3f);
             }
         }
+        if (on) eqVisibilityCheck();          // im Hintergrund/unsichtbar sofort wieder pausieren
     }
 
     private TextView mediaBtn(String s, Runnable action) {
@@ -4145,8 +4197,8 @@ public class MainActivity extends Activity {
 
     private final Runnable netTick = new Runnable() {
         @Override public void run() {
-            checkNetwork();
-            ui.postDelayed(this, 30 * 1000L);
+            if (saver == null || saver.getVisibility() != View.VISIBLE) checkNetwork();   // im Ruhebildschirm unnoetig
+            ui.postDelayed(this, 60 * 1000L);
         }
     };
 
@@ -4403,7 +4455,7 @@ public class MainActivity extends Activity {
             "com.amazon.tv.ime", "com.android.inputmethod"};
     private volatile boolean ramBusy;
 
-    private boolean autoRam() { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("auto_ram", true); }
+    private boolean autoRam() { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("auto_ram", false); }   // Android raeumt selbst auf; vor jedem Start killen bremst
 
     /** Beendet Apps, die nur noch im Hintergrund liegen. Laufende Musik/Video (Vordergrunddienst) bleibt unberuehrt. */
     private void freeRam(String exceptPkg, boolean silent) {

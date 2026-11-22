@@ -25,8 +25,9 @@ public class KeepAliveJob extends JobService {
             if (js == null) return;
             JobInfo ji = new JobInfo.Builder(ID, new ComponentName(c, KeepAliveJob.class))
                     .setPersisted(true)                 // bleibt nach dem Neustart erhalten
-                    .setMinimumLatency(60 * 1000L)
-                    .setOverrideDeadline(90 * 1000L)
+                    // kurz nach dem Start jede Minute, danach nur noch alle 15 Minuten (spart Strom und Flash)
+                    .setMinimumLatency(SystemClock.elapsedRealtime() < 15 * 60 * 1000L ? 60 * 1000L : 15 * 60 * 1000L)
+                    .setOverrideDeadline(SystemClock.elapsedRealtime() < 15 * 60 * 1000L ? 90 * 1000L : 16 * 60 * 1000L)
                     .build();
             js.schedule(ji);
         } catch (Exception ignored) { }
@@ -34,7 +35,7 @@ public class KeepAliveJob extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters p) {
-        HomeWatchService.start(this);
+        if (!HomeWatchService.isRunning()) HomeWatchService.start(this);
         Health.ensureSaver(this);                       // Ruhebildschirm-Einstellung auch ohne offene App pruefen
         if (!MainActivity.createdThisBoot && SystemClock.elapsedRealtime() < 15 * 60 * 1000L) {
             HomeMask.show(this);

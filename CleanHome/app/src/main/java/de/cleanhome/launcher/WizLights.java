@@ -50,12 +50,18 @@ public class WizLights {
         if (hsv[1] < 0.18f) return c;
         hsv[1] = Math.min(1f, hsv[1] * 1.25f + 0.1f);
         hsv[2] = 1f;
+        // Gruen (z. B. Spotify) wirkt auf den LEDs sonst grell -> satteres, dunkleres Gruen
+        if (hsv[0] >= 90f && hsv[0] <= 170f) { hsv[0] = 140f; hsv[1] = 1f; hsv[2] = 0.55f; }
         return Color.HSVToColor(hsv);
     }
 
     /** Weicher Farbwechsel (~0,5 s) zu einer RGB-Farbe. */
-    public void fadeTo(int color0, int dimming) {
+    public void fadeTo(int color0, int dimming0) {
         final int color = ledColor(color0);
+        float[] hv = new float[3];
+        Color.colorToHSV(color0, hv);
+        // Gruen etwas dunkler leuchten lassen (Spotify soll satt statt grell wirken)
+        final int dimming = hv[1] >= 0.18f && hv[0] >= 90f && hv[0] <= 170f ? Math.max(10, Math.round(dimming0 * 0.65f)) : dimming0;
         final int tr = Color.red(color), tg = Color.green(color), tb = Color.blue(color);
         submit(() -> {
             int sr = curR, sg = curG, sb = curB, sd = curDim;

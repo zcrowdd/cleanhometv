@@ -50,6 +50,10 @@ public class HomeWatchService extends Service {
     };
     private boolean screenRegistered;
 
+    /** Laeuft der Waechter schon? Dann nicht jede Minute neu starten (spart Benachrichtigungs-Updates). */
+    static volatile boolean alive;
+    static boolean isRunning() { return alive; }
+
     public static void start(Context c) {
         Intent i = new Intent(c, HomeWatchService.class);
         try {
@@ -71,6 +75,7 @@ public class HomeWatchService extends Service {
         if (worker == null || !worker.isAlive()) {
             Log.i(TAG, "Waechter gestartet");
             running = true;
+            alive = true;
             worker = new Thread(this::watchLoop, "cleanhome-homewatch");
             worker.start();
         }
@@ -102,9 +107,9 @@ public class HomeWatchService extends Service {
             Process p = null;
             try {
                 // -T 1: nur neue Zeilen, nicht das alte Protokoll
-                // main/system: "START ... category.HOME ... com.amazon.tv.launcher" (Home gedrueckt)
+                // system: "START ... category.HOME ... com.amazon.tv.launcher" (Home gedrueckt)
                 // events:      "am_set_resumed_activity ... com.amazon.tv.launcher" (Amazon ist wirklich vorne)
-                p = Runtime.getRuntime().exec(new String[]{"logcat", "-T", "1", "-b", "main,system,events",
+                p = Runtime.getRuntime().exec(new String[]{"logcat", "-T", "1", "-b", "system,events",
                         "ActivityManager:I", "ActivityTaskManager:I",
                         "am_set_resumed_activity:I", "am_resume_activity:I", "*:S"});
                 logcat = p;
@@ -185,6 +190,7 @@ public class HomeWatchService extends Service {
     @Override
     public void onDestroy() {
         running = false;
+        alive = false;
         try { if (logcat != null) logcat.destroy(); } catch (Exception ignored) { }   // blockierendes readLine beenden
         if (screenRegistered) try { unregisterReceiver(screen); } catch (Exception ignored) { }
         super.onDestroy();
