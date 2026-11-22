@@ -185,7 +185,8 @@ public class MainActivity extends Activity {
     private TextView sWeather, saverHello, saverMusic;
     private SaverClock saverClock;
     private SaverParticles saverDust;
-    private GradientDrawable saverGlow;
+    private GradientDrawable saverGlow, saverDotBg;
+    private View saverDot, saverMusicSep;
     private final Random rnd = new Random();
 
     // Wetter
@@ -3783,10 +3784,9 @@ public class MainActivity extends Activity {
                 .setInterpolator(new android.view.animation.DecelerateInterpolator(2f)).start();
         saver.animate().alpha(1f).setDuration(900).withEndAction(() -> { hideUnderSaver(); eqVisibilityCheck(); }).start();
         wizSaver(true);
-        saverContent.setTranslationX(0);
+        saverContent.setTranslationX(0);          // alles bleibt ruhig in der Mitte
         saverContent.setTranslationY(0);
         ui.removeCallbacks(this.driftTick);
-        ui.postDelayed(this.driftTick, SAVER_DRIFT_MS);
         ui.removeCallbacks(this.cornerTick);
         ui.post(this.cornerTick);
     };
@@ -3919,7 +3919,8 @@ public class MainActivity extends Activity {
     private void applySaverAccent(int c) {
         if (saverClock != null) saverClock.setAccent(c);
         if (saverDust != null) saverDust.setAccent(c);
-        if (saverGlow != null) saverGlow.setColors(new int[]{0x38000000 | (c & 0xFFFFFF), 0x00000000});
+        if (saverGlow != null) saverGlow.setColors(new int[]{0x40000000 | (c & 0xFFFFFF), 0x00000000});
+        if (saverDotBg != null) saverDotBg.setColor(c);
     }
 
     /** Begruessung je nach Uhrzeit + was gerade laeuft. */
@@ -3927,7 +3928,7 @@ public class MainActivity extends Activity {
         if (saverHello == null) return;
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         String g = h < 5 ? "GUTE NACHT" : h < 11 ? "GUTEN MORGEN" : h < 17 ? "GUTEN TAG" : h < 22 ? "GUTEN ABEND" : "GUTE NACHT";
-        saverHello.setText(g + "  ·  BECKINGEN");
+        saverHello.setText(g);
         if (wLine != null && !wLine.isEmpty()) sWeather.setText(wLine);
         android.media.session.MediaController c = npCtrl;
         String line = null;
@@ -3937,6 +3938,7 @@ public class MainActivity extends Activity {
             if (t != null) line = "♫  " + t + (a != null && !a.isEmpty() ? "  —  " + a : "");
         }
         saverMusic.setVisibility(line != null ? View.VISIBLE : View.GONE);
+        if (saverMusicSep != null) saverMusicSep.setVisibility(line != null ? View.VISIBLE : View.GONE);
         if (line != null) saverMusic.setText(line);
     }
 
@@ -3966,15 +3968,12 @@ public class MainActivity extends Activity {
                 float fa = ease((now - fadeStart[c]) / 6000f);
                 cornerViews[c][cornerFront[c]].setAlpha(fa);
                 cornerViews[c][1 - cornerFront[c]].setAlpha(1f - fa);
-                if (!deep) {
-                    float m = ease((now - moveStart[c]) / (float) CORNER_STEP_MS);
-                    cornerHolders[c].setTranslationX(moveFrom[c][0] + (moveTo[c][0] - moveFrom[c][0]) * m);
-                    cornerHolders[c].setTranslationY(moveFrom[c][1] + (moveTo[c][1] - moveFrom[c][1]) * m);
-                }
             }
-            float d = ease((now - driftStart) / 4000f);
-            saverContent.setTranslationX(driftFrom[0] + (driftTo[0] - driftFrom[0]) * d);
-            saverContent.setTranslationY(driftFrom[1] + (driftTo[1] - driftFrom[1]) * d);
+            // Lichtschein hinter der Uhr atmet langsam (12 s), die Position bleibt fest
+            if (saverGlow != null && !deep) {
+                float ph = (now % 12000L) / 12000f;
+                saverGlow.setAlpha((int) (150 + 105 * (0.5f + 0.5f * Math.cos(ph * Math.PI * 2))));
+            }
             if (!deep && saverDust != null) saverDust.invalidate();
             if (saverClock != null) saverClock.frame();
             // im Stromsparen nur noch 4 Bilder/s (Farbwechsel bleiben weich, Uhr und Sekunden laufen weiter)
@@ -4062,61 +4061,76 @@ public class MainActivity extends Activity {
         saverContent = new LinearLayout(this);
         saverContent.setOrientation(LinearLayout.VERTICAL);
         saverContent.setGravity(Gravity.CENTER_HORIZONTAL);
-        saverContent.setPadding(dp(160), dp(50), dp(160), dp(50));
-        // weicher Lichtschein hinter der Uhr in der Akzentfarbe
+        saverContent.setPadding(dp(200), dp(60), dp(200), dp(60));
+        // grosser, weicher Lichtschein hinter der Uhr in der Akzentfarbe (atmet langsam)
         saverGlow = new GradientDrawable();
         saverGlow.setGradientType(GradientDrawable.RADIAL_GRADIENT);
-        saverGlow.setGradientRadius(dp(300));
-        saverGlow.setColors(new int[]{0x33000000 | (BLUE & 0xFFFFFF), 0x00000000});
+        saverGlow.setGradientRadius(dp(360));
+        saverGlow.setColors(new int[]{0x40000000 | (BLUE & 0xFFFFFF), 0x00000000});
         saverContent.setBackground(saverGlow);
         saverContent.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, orr, ob) ->
-                saverGlow.setGradientRadius(Math.min(r - l, b - t) * 0.5f));
+                saverGlow.setGradientRadius(Math.min(r - l, b - t) * 0.62f));
 
-        saverHello = tv(13, GRAY_2, fMono);
-        saverHello.setLetterSpacing(0.32f);
-        saverContent.addView(saverHello);
+        // Begruessung: kleiner Akzent-Punkt + gesperrte Grossbuchstaben
+        LinearLayout helloRow = new LinearLayout(this);
+        helloRow.setGravity(Gravity.CENTER_VERTICAL);
+        saverDot = new View(this);
+        saverDotBg = new GradientDrawable();
+        saverDotBg.setShape(GradientDrawable.OVAL);
+        saverDotBg.setColor(BLUE);
+        saverDot.setBackground(saverDotBg);
+        helloRow.addView(saverDot, new LinearLayout.LayoutParams(dp(7), dp(7)));
+        saverHello = tv(13, 0xFFA6A6A6, fMono);
+        saverHello.setLetterSpacing(0.42f);
+        helloRow.addView(saverHello, lpLeft(12));
+        saverContent.addView(helloRow);
 
-        saverClock = new SaverClock(this, fLight, TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 150, getResources().getDisplayMetrics()));
+        saverClock = new SaverClock(this, fLight, TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, 172, getResources().getDisplayMetrics()));
         LinearLayout.LayoutParams lc = new LinearLayout.LayoutParams(-2, -2);
-        lc.topMargin = dp(10);
+        lc.topMargin = dp(6);
         saverContent.addView(saverClock, lc);
 
         TextClock day = new TextClock(this);
-        day.setFormat24Hour("EEEE, d. MMMM");
-        day.setFormat12Hour("EEEE, d. MMMM");
-        day.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22);
-        day.setTypeface(fRegular);
-        day.setTextColor(GRAY_1);
-        day.setPadding(dp(10), dp(2), dp(10), 0);
+        day.setFormat24Hour("EEEE  ·  d. MMMM");
+        day.setFormat12Hour("EEEE  ·  d. MMMM");
+        day.setAllCaps(true);
+        day.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        day.setLetterSpacing(0.28f);
+        day.setTypeface(fMono);
+        day.setTextColor(0xFFBDBDBD);
         saverContent.addView(day);
 
+        // Info-Leiste: EIN dunkles Glas-Element fuer Wetter und (wenn etwas laeuft) Musik
         LinearLayout pills = new LinearLayout(this);
         pills.setOrientation(LinearLayout.HORIZONTAL);
-        pills.setGravity(Gravity.CENTER);
+        pills.setGravity(Gravity.CENTER_VERTICAL);
+        pills.setPadding(dp(8), dp(4), dp(8), dp(4));
+        pills.setBackground(rounded(0x8C0A0A0A, GLASS_LINE, R_L));
         sWeather = tv(15, WHITE, fMono);
-        sWeather.setPadding(dp(16), dp(9), dp(16), dp(9));
-        sWeather.setBackground(rounded(0x99111111, GLASS_LINE, R_L));
+        sWeather.setPadding(dp(14), dp(9), dp(14), dp(9));
         pills.addView(sWeather);
+        saverMusicSep = new View(this);
+        saverMusicSep.setBackgroundColor(GLASS_LINE);
+        saverMusicSep.setVisibility(View.GONE);
+        pills.addView(saverMusicSep, new LinearLayout.LayoutParams(dp(1), dp(20)));
         saverMusic = tv(15, WHITE, fMono);
-        saverMusic.setPadding(dp(16), dp(9), dp(16), dp(9));
-        saverMusic.setBackground(rounded(0x99111111, GLASS_LINE, R_L));
+        saverMusic.setPadding(dp(14), dp(9), dp(14), dp(9));
         saverMusic.setMaxWidth(dp(420));
         saverMusic.setSingleLine(true);
         saverMusic.setEllipsize(TextUtils.TruncateAt.END);
         saverMusic.setVisibility(View.GONE);
-        LinearLayout.LayoutParams lm = new LinearLayout.LayoutParams(-2, -2);
-        lm.leftMargin = dp(10);
-        pills.addView(saverMusic, lm);
+        pills.addView(saverMusic);
         LinearLayout.LayoutParams lw = new LinearLayout.LayoutParams(-2, -2);
-        lw.topMargin = dp(26);
+        lw.topMargin = dp(30);
         saverContent.addView(pills, lw);
 
+        // Signatur fest unten in der Mitte
         TextView by = tv(11, 0xFF5A5A5A, fMono);
-        by.setText("made by zcrowd");
-        by.setLetterSpacing(0.3f);
-        LinearLayout.LayoutParams lb = new LinearLayout.LayoutParams(-2, -2);
-        lb.topMargin = dp(34);
-        saverContent.addView(by, lb);
+        by.setText("MADE BY ZCROWD");
+        by.setLetterSpacing(0.4f);
+        FrameLayout.LayoutParams lb = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        lb.bottomMargin = dp(30);
+        s.addView(by, lb);
 
         s.addView(saverContent, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
         return s;

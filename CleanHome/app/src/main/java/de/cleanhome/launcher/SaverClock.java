@@ -155,6 +155,12 @@ public class SaverClock extends View {
         cal.setTimeInMillis(System.currentTimeMillis());
         float sec = (cal.get(Calendar.SECOND) + cal.get(Calendar.MILLISECOND) / 1000f) / 60f;
         bar.setColor(accent);
-        c.drawLine(bx, y, bx + Math.max(2, bw * sec), y, bar);
+        float hx = bx + Math.max(2, bw * sec);
+        c.drawLine(bx, y, hx, y, bar);
+        // leuchtender Punkt an der Spitze des Sekunden-Balkens
+        bar.setAlpha(55);
+        c.drawCircle(hx, y, 8 * density, bar);
+        bar.setAlpha(255);
+        c.drawCircle(hx, y, 3.4f * density, bar);
     }
 }
