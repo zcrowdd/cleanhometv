@@ -1757,6 +1757,7 @@ public class MainActivity extends Activity {
         panel.addView(head);
 
         View first = null, last = null;
+        final List<View> menuRows = new ArrayList<>();
         boolean anyRow = false;
         for (MItem mi : items) {
             if (mi.action == null) {                    // Zwischenueberschrift, nicht auswaehlbar
@@ -1812,15 +1813,10 @@ public class MainActivity extends Activity {
                 if (menuLayer.getVisibility() != View.VISIBLE) restoreFocusAfterMenu();
             });
             t.setId(View.generateViewId());
-            t.setOnKeyListener((v, k, e) ->            // links/rechts verlaesst das Menue nicht
-                    k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT);
             panel.addView(t, new LinearLayout.LayoutParams(-1, -2));
+            menuRows.add(t);
             if (first == null) first = t;
             last = t;
-        }
-        if (first != null) {                            // oben/unten bleibt die Auswahl im Menue
-            first.setNextFocusUpId(first.getId());
-            last.setNextFocusDownId(last.getId());
         }
         scroll.setDescendantFocusability(android.view.ViewGroup.FOCUS_BLOCK_DESCENDANTS);
         TextView foot = tv(11, glassOn ? 0xFF8C8C8C : GRAY_2, fMono);
@@ -1831,6 +1827,25 @@ public class MainActivity extends Activity {
         ScrollView sv = new ScrollView(this);
         sv.setVerticalScrollBarEnabled(false);
         sv.addView(panel);
+        // Hoch/runter selbst steuern: jede Zeile wird sicher erreicht, die Bereichsueberschrift bleibt sichtbar,
+        // und am Ende geht es oben weiter (und umgekehrt). Links/rechts verlassen das Menue nicht.
+        for (int i = 0; i < menuRows.size(); i++) {
+            final int idx = i;
+            menuRows.get(i).setOnKeyListener((v, k, e) -> {
+                if (k == KeyEvent.KEYCODE_DPAD_LEFT || k == KeyEvent.KEYCODE_DPAD_RIGHT) return true;
+                if (k != KeyEvent.KEYCODE_DPAD_UP && k != KeyEvent.KEYCODE_DPAD_DOWN) return false;
+                if (e.getAction() == KeyEvent.ACTION_DOWN) {
+                    int n = menuRows.size();
+                    int j = idx + (k == KeyEvent.KEYCODE_DPAD_UP ? -1 : 1);
+                    if (j < 0) j = n - 1;
+                    if (j >= n) j = 0;
+                    View next = menuRows.get(j);
+                    next.requestFocus();
+                    scrollMenuTo(sv, panel, next, j == 0, j == n - 1);
+                }
+                return true;
+            });
+        }
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dp(600), -2, Gravity.CENTER);
         lp.topMargin = dp(40);
         lp.bottomMargin = dp(40);
@@ -1843,6 +1858,16 @@ public class MainActivity extends Activity {
         sv.setScaleY(0.96f);
         sv.animate().scaleX(1f).scaleY(1f).setDuration(180).setInterpolator(new DecelerateInterpolator()).start();
         if (first != null) first.requestFocus();
+    }
+
+    /** Menue so scrollen, dass die Zeile samt Ueberschrift darueber sichtbar ist (erste Zeile: ganz nach oben). */
+    private void scrollMenuTo(ScrollView sv, View panel, View row, boolean isFirst, boolean isLast) {
+        if (isFirst) { sv.smoothScrollTo(0, 0); return; }
+        if (isLast) { sv.smoothScrollTo(0, Math.max(0, panel.getHeight() - sv.getHeight())); return; }
+        int top = row.getTop() - dp(56), bottom = row.getBottom() + dp(28);
+        int cur = sv.getScrollY(), h = sv.getHeight();
+        if (top < cur) sv.smoothScrollTo(0, Math.max(0, top));
+        else if (bottom > cur + h) sv.smoothScrollTo(0, bottom - h);
     }
 
     private void hideMenuQuiet() {
