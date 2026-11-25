@@ -122,7 +122,7 @@ public class HomeWatchService extends Service {
                             String pk = m.group(1);
                             if (pk.equals(getPackageName())) { /* CleanHome selbst */ }
                             else if (pk.equals(AMAZON_HOME) || pk.startsWith("com.android.systemui")) lastForegroundPkg = null;
-                            else lastForegroundPkg = pk;
+                            else { lastForegroundPkg = pk; ContinueWatching.onAppForeground(this, pk); }   // Weiterschauen-Daten mitlesen
                             MainActivity.foregroundChanged();
                         }
                     }

@@ -1106,6 +1106,11 @@ public class MainActivity extends Activity {
 
     /** Kachel aus Text: dunkler Verlauf in der Akzentfarbe, grosser Titel, Zusatzzeile. Optional ein abgedunkeltes Bild dahinter. */
     private Drawable textBanner(String title, String sub, int color, Drawable behind) {
+        return textBanner(title, sub, color, behind, -1f);
+    }
+
+    /** progress 0..1: Fortschrittsbalken unten (wie bei Amazon), -1 = durchgehender Farbbalken. */
+    private Drawable textBanner(String title, String sub, int color, Drawable behind, float progress) {
         int w = 640, h = 360;
         Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
         Canvas c = new Canvas(bmp);
@@ -1142,8 +1147,15 @@ public class MainActivity extends Activity {
         m.setLetterSpacing(0.08f);
         c.drawText(sub, 46, 300, m);
         Paint bar = new Paint();
-        bar.setColor(color);
-        c.drawRect(0, h - 8, w, h, bar);
+        if (progress >= 0f) {
+            bar.setColor(0x55FFFFFF);
+            c.drawRect(0, h - 8, w, h, bar);
+            bar.setColor(color);
+            c.drawRect(0, h - 8, w * Math.max(0.03f, progress), h, bar);
+        } else {
+            bar.setColor(color);
+            c.drawRect(0, h - 8, w, h, bar);
+        }
         return tileFromBitmap(bmp);
     }
 
@@ -1181,6 +1193,43 @@ public class MainActivity extends Activity {
 
     private void buildResumeApps() {
         resumeApps.clear();
+        resumeLinks.clear();
+        java.util.Set<String> withReal = new java.util.HashSet<>();
+        try {
+            int n = 0;
+            for (ContinueWatching.Entry e : ContinueWatching.entries(this)) {
+                if (n >= 8) break;
+                AppInfo src = null;
+                for (AppInfo x : apps) if (x.pkg.equals(e.pkg)) src = x;
+                if (src == null) continue;
+                withReal.add(e.pkg);
+                AppInfo a = new AppInfo();
+                a.pkg = RESUME_PREFIX + "cw" + n;
+                a.label = e.title;
+                a.color = brandColor(src.pkg);
+                a.launch = src.launch;
+                a.src = src.pkg;
+                String sub = src.label;
+                if (e.season > 0 && e.episode > 0) sub = "S" + e.season + " · F" + e.episode + (e.episodeTitle.isEmpty() ? "" : " · " + e.episodeTitle);
+                else if (e.next) sub = src.label + " · nächste Folge";
+                if (e.duration > 0 && e.progress > 0 && !e.next) {
+                    long left = Math.max(1, (e.duration - e.progress) / 60000);
+                    sub = sub + " · noch " + left + " Min";
+                }
+                Drawable behind = null;
+                java.io.File img = new java.io.File(new java.io.File(getCacheDir(), "cw"), Integer.toHexString(e.img.hashCode()) + ".jpg");
+                if (img.exists()) {
+                    Bitmap b = BitmapFactory.decodeFile(img.getAbsolutePath());
+                    if (b != null) behind = new android.graphics.drawable.BitmapDrawable(getResources(), b);
+                }
+                float prog = e.duration > 0 ? Math.min(1f, e.progress / (float) e.duration) : -1f;
+                a.banner = textBanner(e.title, sub.toUpperCase(Locale.GERMANY), a.color, behind, prog);
+                String link = ContinueWatching.usableLink(e);
+                if (link != null) resumeLinks.put(a.pkg, link);
+                resumeApps.add(a);
+                n++;
+            }
+        } catch (Exception ignored) { }
         try {
             org.json.JSONArray arr = new org.json.JSONArray(getSharedPreferences(PREFS, MODE_PRIVATE).getString("history", "[]"));
             for (int i = 0; i < arr.length(); i++) {
@@ -1188,6 +1237,9 @@ public class MainActivity extends Activity {
                 AppInfo src = null;
                 for (AppInfo a : apps) if (a.pkg.equals(o.optString("p"))) src = a;
                 if (src == null) continue;                       // App deinstalliert
+                if (resumeApps.size() >= 8) break;
+                // App liefert echte Folgen -> den einfachen "Netflix · vor 2 Std"-Eintrag weglassen
+                if (withReal.contains(src.pkg) && o.optString("t").equals(src.label)) continue;
                 AppInfo a = new AppInfo();
                 a.pkg = RESUME_PREFIX + i;
                 a.label = o.optString("t");
@@ -2626,6 +2678,27 @@ public class MainActivity extends Activity {
 
     private static java.lang.ref.WeakReference<MainActivity> inst;
     /** Vom Waechter: eine andere App ist nach vorne gekommen -> Licht neu berechnen. */
+    /** Neue echte Weiterschauen-Daten (aus ContinueWatching) -> Reihe neu bauen, Bilder laden. */
+    static void continueWatchingChanged() {
+        MainActivity a = inst != null ? inst.get() : null;
+        if (a == null) return;
+        a.ui.removeCallbacks(a.cwRefresh);
+        a.ui.postDelayed(a.cwRefresh, 800);                     // mehrere Zeilen kurz sammeln
+    }
+    private final Runnable cwRefresh = () -> {
+        buildResumeApps();
+        updateResumeRow();
+        new Thread(() -> {                                      // fehlende Vorschaubilder laden
+            boolean any = false;
+            for (ContinueWatching.Entry e : ContinueWatching.entries(this)) {
+                java.io.File f = new java.io.File(new java.io.File(getCacheDir(), "cw"), Integer.toHexString(e.img.hashCode()) + ".jpg");
+                if (!e.img.isEmpty() && !f.exists() && ContinueWatching.image(this, e.img) != null) any = true;
+            }
+            if (any) ui.post(() -> { buildResumeApps(); updateResumeRow(); });
+        }, "cwImages").start();
+    };
+    private final Map<String, String> resumeLinks = new java.util.HashMap<>();
+
     static void foregroundChanged() {
         MainActivity a = inst != null ? inst.get() : null;
         if (a != null) a.ui.post(() -> { a.trackVideoSession(); a.scheduleLights(300); });
@@ -4526,6 +4599,19 @@ public class MainActivity extends Activity {
         if (PC_PKG.equals(a.pkg)) { startPcGaming(); return; }
         if (a.pkg.startsWith(GAME_PREFIX)) { startPcGaming(a.label); return; }
         if (a.pkg.startsWith(RESUME_PREFIX)) {
+            String link = resumeLinks.get(a.pkg);
+            if (link != null && a.src != null) {                // direkt in die Folge
+                try {
+                    lastLaunchedPkg = a.src;
+                    HomeWatchService.lastForegroundPkg = a.src;
+                    lastLeftByLaunch = System.currentTimeMillis();
+                    wizLaunch();
+                    Intent v = new Intent(Intent.ACTION_VIEW, android.net.Uri.parse(link))
+                            .setPackage(a.src).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(v);
+                    return;
+                } catch (Exception ignored) { }                  // klappt nicht -> App normal oeffnen
+            }
             AppInfo real = a.src != null ? find(a.src) : null;
             if (real != null) launch(real); else toast("Die App ist nicht mehr installiert");
             return;
