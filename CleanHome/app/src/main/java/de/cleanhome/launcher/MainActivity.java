@@ -223,6 +223,7 @@ public class MainActivity extends Activity {
         createdThisBoot = true;
         installCrashLogger();
         ui.postDelayed(this::ensureSaverSettings, 3000);
+        goxlr.setHost(pcIp());
         new Thread(() -> Updater.cleanup(this), "updateCleanup").start();   // alte Update-APK wegraeumen
         ui.postDelayed(updateTick, 90_000);           // 1,5 min nach dem Start, dann alle 6 Stunden
         try {
@@ -277,14 +278,20 @@ public class MainActivity extends Activity {
             if (saver != null && saver.getVisibility() == View.VISIBLE) return;
             if (menuLayer != null && menuLayer.getVisibility() == View.VISIBLE) return;
             if (pcLayer != null && pcLayer.getVisibility() == View.VISIBLE) return;
-            Bitmap b = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.RGB_565);
-            root.draw(new Canvas(b));
+            if (!homeVisible) return;
+            // halbe Aufloesung reicht fuer das kurze Standbild (≈1 MB statt 4 MB)
+            int w = root.getWidth() / 2, h = root.getHeight() / 2;
+            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
+            Canvas c = new Canvas(b);
+            c.scale(0.5f, 0.5f);
+            root.draw(c);
             HomeMask.snapshot = b;
         } catch (Throwable ignored) { }
     }
 
     @Override
     protected void onPause() {
+        takeSnapshot();                           // Standbild fuer das Sofort-Home beim naechsten Home-Druck
         isFront = false;
         getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         super.onPause();
@@ -320,6 +327,7 @@ public class MainActivity extends Activity {
         try { unregisterReceiver(screenReceiver); } catch (Exception ignored) { }
         try { unregisterReceiver(packageReceiver); } catch (Exception ignored) { }
         try { ((android.hardware.input.InputManager) getSystemService(INPUT_SERVICE)).unregisterInputDeviceListener(padListener); } catch (Exception ignored) { }
+        goxlr.shutdown();
         ui.removeCallbacksAndMessages(null);
     }
 
@@ -1732,6 +1740,66 @@ public class MainActivity extends Activity {
         if (saverDust != null) saverDust.setVisibility(nightActive ? View.INVISIBLE : View.VISIBLE);
     }
 
+    // ================================================================ GoXLR (ueber die GoXLR Utility am PC)
+    private final GoXlr goxlr = new GoXlr();
+
+    private boolean goxlrOn() { return getSharedPreferences(PREFS, MODE_PRIVATE).getBoolean("goxlr_on", false); }
+
+    private void openGoxlrMenu() {
+        SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+        List<MItem> items = new ArrayList<>();
+        Runnable again = () -> ui.postDelayed(this::openGoxlrMenu, 200);
+        items.add(new MItem("GOXLR", null));
+        items.add(new MItem("Farbe der LEDs übernehmen  ·  " + (goxlrOn() ? "an" : "aus"), () -> {
+            boolean n = !goxlrOn();
+            p.edit().putBoolean("goxlr_on", n).apply();
+            if (n) testGoxlr(); else toast("GoXLR aus");
+        }));
+        items.add(new MItem("Verbindung testen  ·  " + (pcIp().isEmpty() ? "PC-IP fehlt" : pcIp()), this::testGoxlr));
+        String prof = p.getString("goxlr_game_profile", "");
+        items.add(new MItem("Profil beim PC-Start  ·  " + (prof.isEmpty() ? "keins" : prof), this::pickGoxlrProfile));
+        items.add(new MItem("SO GEHT ES", null));
+        items.add(new MItem("1  Am PC die kostenlose GoXLR Utility nutzen", again));
+        items.add(new MItem("2  Dort „Allow UI Network Access“ einschalten", again));
+        items.add(new MItem("3  Utility neu starten, dann hier testen", again));
+        showMenu("GoXLR", items);
+    }
+
+    private void testGoxlr() {
+        if (pcIp().isEmpty()) { toast("Erst bei PC-Gaming die IP des PCs eintragen"); return; }
+        goxlr.setHost(pcIp());
+        new Thread(() -> {
+            String s = goxlr.probe();
+            ui.post(() -> {
+                if (s != null) { toast("GoXLR gefunden · " + s); scheduleLights(0); }
+                else toast(goxlr.lastError != null ? goxlr.lastError : "GoXLR nicht gefunden");
+            });
+        }, "goxlrTest").start();
+    }
+
+    private void pickGoxlrProfile() {
+        if (pcIp().isEmpty()) { toast("Erst bei PC-Gaming die IP des PCs eintragen"); return; }
+        goxlr.setHost(pcIp());
+        new Thread(() -> {
+            String ok = goxlr.probe();
+            ui.post(() -> {
+                if (ok == null) { toast(goxlr.lastError != null ? goxlr.lastError : "GoXLR nicht gefunden"); return; }
+                SharedPreferences p = getSharedPreferences(PREFS, MODE_PRIVATE);
+                List<MItem> items = new ArrayList<>();
+                items.add(new MItem("PROFIL BEIM PC-START", null));
+                List<String> names = new ArrayList<>(goxlr.profiles);
+                names.add(0, "");
+                for (String n : names) {
+                    items.add(new MItem(n.isEmpty() ? "Keins (nichts ändern)" : n, () -> {
+                        p.edit().putString("goxlr_game_profile", n).apply();
+                        toast(n.isEmpty() ? "Profil bleibt beim PC-Start unverändert" : "Beim PC-Start: Profil „" + n + "“");
+                    }));
+                }
+                showMenu("GoXLR-Profil", items);
+            });
+        }, "goxlrProfiles").start();
+    }
+
     private void openSettingsMenu() {
         List<MItem> items = new ArrayList<>();
         items.add(new MItem("SCHLAFMODUS", null));
@@ -1748,6 +1816,7 @@ public class MainActivity extends Activity {
         items.add(new MItem("LICHT", null));
         items.add(new MItem("WiZ hinter dem Fernseher  ·  " + (wizOn ? "automatisch" : "aus"), this::openWizMenu));
         items.add(new MItem("Govee im Raum  ·  " + (goveeOn ? "dimmt beim Streaming" : "aus"), this::openGoveeMenu));
+        items.add(new MItem("GoXLR am PC  ·  " + (goxlrOn() ? "leuchtet mit" : "aus"), this::openGoxlrMenu));
         items.add(new MItem("STIMMUNG", null));
         items.add(new MItem("Kaminfeuer  ·  Szene", () -> openAmbient(0)));
         items.add(new MItem("Gewitter am Fenster  ·  Szene", () -> openAmbient(1)));
@@ -2098,6 +2167,7 @@ public class MainActivity extends Activity {
             return;
         }
         pcStarting = true;
+        if (goxlrOn()) { goxlr.setHost(pcIp()); goxlr.loadProfile(getSharedPreferences(PREFS, MODE_PRIVATE).getString("goxlr_game_profile", "")); }
         pcGameName = game;
         scheduleLights(0);
         showPcLayer();
@@ -2647,6 +2717,9 @@ public class MainActivity extends Activity {
         items.add(new MItem("Letzter Start Bildschirmschoner: " + (ds != null ? ds : "–"), again));
         items.add(new MItem("Letzter CleanHome-Ruhebildschirm: " + (ss != null ? ss : "–"), again));
         items.add(new MItem("Zuletzt schwarz/ausgeschaltet: " + (off != null ? off : "–"), again));
+        String hb = Health.lastStamp(this, "home_bc");
+        items.add(new MItem("HOME-TASTE", null));
+        items.add(new MItem((hb != null ? "✓  Schnelles Home-Signal zuletzt: " + hb : "–  Schnelles Home-Signal noch nie empfangen"), again));
         items.add(new MItem("RECHTE", null));
         items.add(new MItem(mark(Health.granted(this, "android.permission.READ_LOGS")) + "Home-Taste (READ_LOGS)", again));
         items.add(new MItem(mark(Health.granted(this, "android.permission.WRITE_SECURE_SETTINGS")) + "Selbst-Reparatur (WRITE_SECURE_SETTINGS)", again));
@@ -3047,6 +3120,7 @@ public class MainActivity extends Activity {
         lightKey = key;
         lightSentAt = android.os.SystemClock.uptimeMillis();
         if (t[0] == 1) wiz.white(t[1], t[2]); else wiz.fadeTo(t[1], t[2]);
+        if (goxlrOn()) goxlr.color(t[0] == 1 ? 0xFFFFFF : WizLights.ledColor(t[1]));   // GoXLR leuchtet mit
         ui.removeCallbacks(resendLights);
         ui.postDelayed(resendLights, 1500);                       // einmal absichern
     }
