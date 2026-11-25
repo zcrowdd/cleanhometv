@@ -1219,7 +1219,7 @@ public class MainActivity extends Activity {
                 Drawable behind = null;
                 java.io.File img = new java.io.File(new java.io.File(getCacheDir(), "cw"), Integer.toHexString(e.img.hashCode()) + ".jpg");
                 if (img.exists()) {
-                    Bitmap b = BitmapFactory.decodeFile(img.getAbsolutePath());
+                    Bitmap b = android.graphics.BitmapFactory.decodeFile(img.getAbsolutePath());
                     if (b != null) behind = new android.graphics.drawable.BitmapDrawable(getResources(), b);
                 }
                 float prog = e.duration > 0 ? Math.min(1f, e.progress / (float) e.duration) : -1f;
