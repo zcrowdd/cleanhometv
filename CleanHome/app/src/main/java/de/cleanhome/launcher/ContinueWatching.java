@@ -42,7 +42,51 @@ final class ContinueWatching {
 
     /** Vom Waechter: eine App ist nach vorne gekommen -> kurz mitlesen. */
     static synchronized void onAppForeground(Context c, String pkg) {
-        stopAt = System.currentTimeMillis() + READ_FOR_MS;
+        listen(c, READ_FOR_MS);
+    }
+
+    private static long lastPoke;
+
+    /**
+     * Zurueck auf CleanHome (Zurueck- oder Home-Taste): Netflix & Co. bitten, ihre Weiterschauen-Liste
+     * neu zu melden. Das geht ueber das normale "Programme initialisieren"-Signal, auf das diese Apps
+     * hoeren - sie melden dann im Hintergrund nach ca. 10-20 s. Hoechstens alle 30 s.
+     */
+    static synchronized void refresh(Context c) {
+        long now = System.currentTimeMillis();
+        if (now - lastPoke < 30_000) return;
+        lastPoke = now;
+        final Context app = c.getApplicationContext();
+        listen(app, 90_000);
+        new Thread(() -> poke(app), "cleanhome-cw-poke").start();
+    }
+
+    private static void poke(Context c) {
+        try {
+            java.util.Set<String> want = new java.util.HashSet<>();
+            want.add("com.netflix.ninja");
+            Iterator<String> it = load(c).keys();
+            while (it.hasNext()) want.add(it.next());
+            String last = HomeWatchService.lastForegroundPkg;
+            if (last != null) want.add(last);
+            android.content.Intent q = new android.content.Intent("android.media.tv.action.INITIALIZE_PROGRAMS");
+            List<android.content.pm.ResolveInfo> rs = c.getPackageManager().queryBroadcastReceivers(q, 0);
+            for (android.content.pm.ResolveInfo r : rs) {
+                if (r.activityInfo == null || !want.contains(r.activityInfo.packageName)) continue;
+                android.content.Intent i = new android.content.Intent(q.getAction())
+                        .setClassName(r.activityInfo.packageName, r.activityInfo.name)
+                        .addFlags(android.content.Intent.FLAG_INCLUDE_STOPPED_PACKAGES
+                                | android.content.Intent.FLAG_RECEIVER_FOREGROUND);
+                try { c.sendBroadcast(i); Log.i(TAG, "Aktualisieren angefragt: " + r.activityInfo.packageName); }
+                catch (Exception e) { Log.w(TAG, "Anfrage abgelehnt: " + r.activityInfo.packageName, e); }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Aktualisieren fehlgeschlagen", e);
+        }
+    }
+
+    private static synchronized void listen(Context c, long forMs) {
+        stopAt = Math.max(stopAt, System.currentTimeMillis() + forMs);
         if (reader != null && reader.isAlive()) return;
         final Context app = c.getApplicationContext();
         reader = new Thread(() -> readLoop(app), "cleanhome-cw");

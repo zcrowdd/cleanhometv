@@ -260,6 +260,10 @@ public class MainActivity extends Activity {
         ui.removeCallbacks(netTick); ui.post(netTick);
         isFront = true;
         closeVideoSession();              // aus einer Video-App zurueck -> ggf. in "Weiterschauen"
+        // Zurueck/Home: Streaming-Apps um ihre aktuelle Weiterschauen-Liste bitten (jetzt und nach 2 Min. nochmal)
+        ContinueWatching.refresh(this);
+        ui.removeCallbacks(cwRefresh); ui.postDelayed(cwRefresh, 300);   // Reihe gleich neu sortieren
+        ui.removeCallbacks(cwLater); ui.postDelayed(cwLater, 120_000);
         // Solange CleanHome vorne ist, geht der Stick nie in den schwarzen Ruhezustand
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         HomeMask.hide(this, true);        // CleanHome ist vorne -> Standbild ausblenden
@@ -2722,6 +2726,8 @@ public class MainActivity extends Activity {
             vidTitled = false;
         }
     }
+
+    private final Runnable cwLater = () -> { if (isFront) ContinueWatching.refresh(this); };
 
     private void closeVideoSession() {
         String pkg = vidPkg;
