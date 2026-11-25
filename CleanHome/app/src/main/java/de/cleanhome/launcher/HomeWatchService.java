@@ -4,7 +4,6 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
@@ -51,25 +50,6 @@ public class HomeWatchService extends Service {
     };
     private boolean screenRegistered;
 
-    /**
-     * Amazons Startseite meldet einen Druck auf Home per Broadcast - etwa eine halbe Sekunde frueher
-     * als das Protokoll (Idee aus dem Open-Source-Projekt FireFrame). logcat bleibt als Absicherung.
-     */
-    static final String HOME_PRESSED = "com.amazon.tv.launcher.HOME_PRESSED";
-    private volatile long lastBcHome;
-    private final BroadcastReceiver homeBc = new BroadcastReceiver() {
-        @Override public void onReceive(Context c, Intent i) {
-            Health.stamp(c, "home_bc");
-            if (System.currentTimeMillis() - MainActivity.settingsOpenedAt < 4000) return;
-            if (MainActivity.isFront) return;                     // CleanHome ist schon vorne
-            lastBcHome = System.currentTimeMillis();
-            Log.i(TAG, "Home erkannt (Broadcast)");
-            HomeMask.show(c);
-            later(0, "home-bc");
-            later(700, "home-bc+700");
-        }
-    };
-
     /** Laeuft der Waechter schon? Dann nicht jede Minute neu starten (spart Benachrichtigungs-Updates). */
     static volatile boolean alive;
     static boolean isRunning() { return alive; }
@@ -89,7 +69,6 @@ public class HomeWatchService extends Service {
                 android.content.IntentFilter f = new android.content.IntentFilter(Intent.ACTION_SCREEN_OFF);
                 f.addAction(Intent.ACTION_SCREEN_ON);
                 registerReceiver(screen, f);
-                registerReceiver(homeBc, new android.content.IntentFilter(HOME_PRESSED));
                 screenRegistered = true;
             } catch (Exception ignored) { }
         }
@@ -158,7 +137,6 @@ public class HomeWatchService extends Service {
                         continue;
                     }
                     if (line.contains("category.HOME")) {
-                        if (System.currentTimeMillis() - lastBcHome < 1500) continue;   // schon per Broadcast erledigt
                         // Home-Taste gedrueckt: sofort einmal und nach Amazons Aufbau nochmal
                         Log.i(TAG, "Home erkannt");
                         HomeMask.show(this);
@@ -214,10 +192,7 @@ public class HomeWatchService extends Service {
         running = false;
         alive = false;
         try { if (logcat != null) logcat.destroy(); } catch (Exception ignored) { }   // blockierendes readLine beenden
-        if (screenRegistered) {
-            try { unregisterReceiver(screen); } catch (Exception ignored) { }
-            try { unregisterReceiver(homeBc); } catch (Exception ignored) { }
-        }
+        if (screenRegistered) try { unregisterReceiver(screen); } catch (Exception ignored) { }
         super.onDestroy();
     }
 

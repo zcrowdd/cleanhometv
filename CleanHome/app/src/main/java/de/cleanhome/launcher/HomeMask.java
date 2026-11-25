@@ -127,20 +127,7 @@ public final class HomeMask {
             if (mask != null || !allowed(c)) return;
             try {
                 WindowManager wm = (WindowManager) c.getSystemService(Context.WINDOW_SERVICE);
-                // Sofort-Bild: letztes Standbild von CleanHome, sonst der Ladebalken
-                FrameLayout v;
-                Bitmap snap = snapshot;
-                if (snap != null && !snap.isRecycled()) {
-                    v = new FrameLayout(c);
-                    v.setBackgroundColor(0xFF000000);
-                    ImageView iv = new ImageView(c);
-                    iv.setScaleType(ImageView.ScaleType.FIT_XY);
-                    iv.setImageBitmap(snap);
-                    v.addView(iv, new FrameLayout.LayoutParams(-1, -1));
-                    fill = null;
-                } else {
-                    v = buildLoader(c);
-                }
+                FrameLayout v = buildLoader(c);
                 // WICHTIG: das Overlay darf KEINEN Fokus nehmen. Sonst bekommt Amazons Startseite nie den
                 // Fokus, Android gibt die Home-Sperre nicht frei und CleanHome kommt gar nicht mehr nach vorne.
                 int type = Build.VERSION.SDK_INT >= 26
@@ -187,8 +174,6 @@ public final class HomeMask {
                 // Balken sauber auf 100 % fahren, dann ausblenden
                 fill.animate().scaleX(1f).setDuration(90).withEndAction(() ->
                         v.animate().alpha(0f).setDuration(120).withEndAction(remove).start()).start();
-            } else if (smooth) {                                  // Standbild weich in das echte CleanHome blenden
-                v.animate().alpha(0f).setDuration(140).withEndAction(remove).start();
             } else {
                 remove.run();
             }

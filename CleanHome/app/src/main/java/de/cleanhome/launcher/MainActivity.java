@@ -278,20 +278,14 @@ public class MainActivity extends Activity {
             if (saver != null && saver.getVisibility() == View.VISIBLE) return;
             if (menuLayer != null && menuLayer.getVisibility() == View.VISIBLE) return;
             if (pcLayer != null && pcLayer.getVisibility() == View.VISIBLE) return;
-            if (!homeVisible) return;
-            // halbe Aufloesung reicht fuer das kurze Standbild (≈1 MB statt 4 MB)
-            int w = root.getWidth() / 2, h = root.getHeight() / 2;
-            Bitmap b = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565);
-            Canvas c = new Canvas(b);
-            c.scale(0.5f, 0.5f);
-            root.draw(c);
+            Bitmap b = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.RGB_565);
+            root.draw(new Canvas(b));
             HomeMask.snapshot = b;
         } catch (Throwable ignored) { }
     }
 
     @Override
     protected void onPause() {
-        takeSnapshot();                           // Standbild fuer das Sofort-Home beim naechsten Home-Druck
         isFront = false;
         getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         super.onPause();
@@ -2717,9 +2711,6 @@ public class MainActivity extends Activity {
         items.add(new MItem("Letzter Start Bildschirmschoner: " + (ds != null ? ds : "–"), again));
         items.add(new MItem("Letzter CleanHome-Ruhebildschirm: " + (ss != null ? ss : "–"), again));
         items.add(new MItem("Zuletzt schwarz/ausgeschaltet: " + (off != null ? off : "–"), again));
-        String hb = Health.lastStamp(this, "home_bc");
-        items.add(new MItem("HOME-TASTE", null));
-        items.add(new MItem((hb != null ? "✓  Schnelles Home-Signal zuletzt: " + hb : "–  Schnelles Home-Signal noch nie empfangen"), again));
         items.add(new MItem("RECHTE", null));
         items.add(new MItem(mark(Health.granted(this, "android.permission.READ_LOGS")) + "Home-Taste (READ_LOGS)", again));
         items.add(new MItem(mark(Health.granted(this, "android.permission.WRITE_SECURE_SETTINGS")) + "Selbst-Reparatur (WRITE_SECURE_SETTINGS)", again));
